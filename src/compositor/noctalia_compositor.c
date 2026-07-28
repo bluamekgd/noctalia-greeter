@@ -750,10 +750,19 @@ static void focus_view(struct greeter_view* view) {
   }
 }
 
+// No session (rare) is treated as always active. When logind pauses the seat,
+// session->active is false and DRM commits fail with EINVAL until resume.
+static bool session_is_active(const struct greeter_server* server) {
+  return server->session == NULL || server->session->active;
+}
+
 static void schedule_output_frames(struct greeter_server* server) {
+  if (!session_is_active(server)) {
+    return;
+  }
   struct greeter_output* output;
   wl_list_for_each(output, &server->outputs, link) {
-    if (output->active) {
+    if (output->active && output->wlr_output->enabled) {
       wlr_output_schedule_frame(output->wlr_output);
     }
   }
@@ -762,9 +771,13 @@ static void schedule_output_frames(struct greeter_server* server) {
 static void handle_output_frame(struct wl_listener* listener, void* data) {
   (void)data;
   struct greeter_output* output = wl_container_of(listener, output, frame);
+  struct greeter_server* server = output->server;
   struct wlr_scene_output* scene_output = output->scene_output;
 
-  if (scene_output == NULL) {
+  // Skip while logind has paused the DRM FD (logout / VT switch). Continuing
+  // to commit produces Atomic commit failed / Failed to disable CRTC noise and
+  // can race choose_outputs() against a half-torn-down seat.
+  if (!session_is_active(server) || !output->wlr_output->enabled || scene_output == NULL) {
     return;
   }
   if (!wlr_scene_output_commit(scene_output, NULL)) {
@@ -778,11 +791,17 @@ static void handle_output_frame(struct wl_listener* listener, void* data) {
 
   // Keep the greeter compositor repainting so scanout recovers cleanly after
   // idle or output power transitions even when the scene itself is static.
-  schedule_output_frames(output->server);
+  schedule_output_frames(server);
 }
 
 static void handle_output_request_state(struct wl_listener* listener, void* data) {
   struct greeter_output* output = wl_container_of(listener, output, request_state);
+  struct greeter_server* server = output->server;
+  if (!session_is_active(server)) {
+    wlr_log(WLR_DEBUG, "ignoring request_state for %s while session inactive", output->wlr_output->name);
+    return;
+  }
+
   const struct wlr_output_event_request_state* event = data;
   const bool was_enabled = output->wlr_output->enabled;
   if (!wlr_output_commit_state(output->wlr_output, event->state)) {
@@ -802,7 +821,7 @@ static void handle_output_request_state(struct wl_listener* listener, void* data
   // choose_outputs() path; keep runtime state in sync and rebuild layout.
   if (!is_enabled && output->active) {
     if (output->layout_output != NULL) {
-      wlr_output_layout_remove(output->server->output_layout, output->wlr_output);
+      wlr_output_layout_remove(server->output_layout, output->wlr_output);
       output->layout_output = NULL;
     }
     if (output->scene_output != NULL) {
@@ -812,7 +831,7 @@ static void handle_output_request_state(struct wl_listener* listener, void* data
     output->active = false;
   }
 
-  choose_outputs(output->server);
+  choose_outputs(server);
 }
 
 enum { IDLE_POLL_MS = 2000 };
@@ -828,6 +847,9 @@ static bool any_active_enabled_output(const struct greeter_server* server) {
 }
 
 static void set_outputs_power(struct greeter_server* server, bool on) {
+  if (!session_is_active(server)) {
+    return;
+  }
   bool toggled = false;
   struct greeter_output* output;
   wl_list_for_each(output, &server->outputs, link) {
@@ -1170,6 +1192,10 @@ static void schedule_launch(struct greeter_server* server) {
 }
 
 static void choose_outputs(struct greeter_server* server) {
+  if (server->shutting_down || !session_is_active(server)) {
+    return;
+  }
+
   bool use_all = use_all_outputs(server);
   struct greeter_output* pinned = NULL;
   if (!use_all) {
@@ -1663,14 +1689,21 @@ static void handle_new_input(struct wl_listener* listener, void* data) {
 static void handle_session_active(struct wl_listener* listener, void* data) {
   (void)data;
   struct greeter_server* server = wl_container_of(listener, server, session_active);
-  if (server->shutting_down || server->session == NULL || !server->session->active) {
+  if (server->shutting_down || server->session == NULL) {
     return;
   }
 
-  wlr_log(WLR_INFO, "session active; refreshing keyboard focus");
+  if (!server->session->active) {
+    wlr_log(WLR_INFO, "session inactive; pausing output commits");
+    return;
+  }
+
+  wlr_log(WLR_INFO, "session active; restoring outputs and keyboard focus");
+  choose_outputs(server);
   update_seat_keyboard(server);
   recompute_keyboard_capability(server);
   focus_mapped_views(server);
+  schedule_output_frames(server);
 }
 
 static void handle_xdg_commit(struct wl_listener* listener, void* data) {
