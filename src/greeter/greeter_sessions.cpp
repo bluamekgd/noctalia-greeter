@@ -102,6 +102,42 @@ namespace {
     return dirs;
   }
 
+  [[nodiscard]] bool parseDesktopBool(std::string_view value) {
+    return equalsIgnoreCase(trim(std::string(value)), "true");
+  }
+
+  // DesktopNames is a ;-list; XDG_CURRENT_DESKTOP uses : separators.
+  [[nodiscard]] std::string desktopNamesToXdgCurrentDesktop(std::string_view desktopNames) {
+    std::string out;
+    std::size_t begin = 0;
+    while (begin <= desktopNames.size()) {
+      const std::size_t end = desktopNames.find(';', begin);
+      const std::string part = trim(
+          std::string(desktopNames.substr(begin, end == std::string_view::npos ? std::string_view::npos : end - begin))
+      );
+      if (!part.empty()) {
+        if (!out.empty()) {
+          out.push_back(':');
+        }
+        out += part;
+      }
+      if (end == std::string_view::npos) {
+        break;
+      }
+      begin = end + 1;
+    }
+    return out;
+  }
+
+  [[nodiscard]] std::string firstDesktopName(std::string_view desktopNames) {
+    const std::string current = desktopNamesToXdgCurrentDesktop(desktopNames);
+    if (current.empty()) {
+      return {};
+    }
+    const std::size_t colon = current.find(':');
+    return colon == std::string::npos ? current : current.substr(0, colon);
+  }
+
   void discoverSessionsInDirectory(
       const std::filesystem::path& dir, std::vector<greeter::SessionOption>& sessions,
       std::unordered_set<std::string>& seenNames
@@ -123,21 +159,37 @@ namespace {
       std::string line;
       std::string name;
       std::string exec;
+      std::string desktopNames;
+      bool hidden = false;
+      bool noDisplay = false;
       while (std::getline(in, line)) {
         if (line.rfind("Name=", 0) == 0) {
           name = trim(line.substr(5));
         } else if (line.rfind("Exec=", 0) == 0) {
           exec = sanitizeDesktopExec(line.substr(5));
+        } else if (line.rfind("DesktopNames=", 0) == 0) {
+          desktopNames = trim(line.substr(13));
+        } else if (line.rfind("Hidden=", 0) == 0) {
+          hidden = parseDesktopBool(line.substr(7));
+        } else if (line.rfind("NoDisplay=", 0) == 0) {
+          noDisplay = parseDesktopBool(line.substr(10));
         }
       }
 
-      if (name.empty() || exec.empty()) {
+      if (hidden || noDisplay || name.empty() || exec.empty()) {
         continue;
       }
       if (!seenNames.insert(sessionNameKey(name)).second) {
         continue;
       }
-      sessions.push_back(greeter::SessionOption{.name = name, .command = exec});
+      sessions.push_back(
+          greeter::SessionOption{
+              .name = name,
+              .command = exec,
+              .desktopNames = desktopNames,
+              .sessionType = "wayland",
+          }
+      );
     }
   }
 
@@ -154,7 +206,9 @@ namespace greeter {
     }
 
     if (sessions.empty()) {
-      sessions.push_back(SessionOption{.name = "Shell", .command = "/bin/sh"});
+      sessions.push_back(
+          SessionOption{.name = "Shell", .command = "/bin/sh", .desktopNames = {}, .sessionType = "tty"}
+      );
     }
     return sessions;
   }
@@ -169,6 +223,24 @@ namespace greeter {
       }
     }
     return std::nullopt;
+  }
+
+  std::vector<GreetdEnvironmentEntry> sessionStartEnvironment(const SessionOption& session) {
+    std::vector<GreetdEnvironmentEntry> env;
+    if (!session.sessionType.empty()) {
+      env.push_back({"XDG_SESSION_TYPE", session.sessionType});
+    }
+
+    const std::string currentDesktop = desktopNamesToXdgCurrentDesktop(session.desktopNames);
+    if (!currentDesktop.empty()) {
+      env.push_back({"XDG_CURRENT_DESKTOP", currentDesktop});
+      const std::string sessionDesktop = firstDesktopName(session.desktopNames);
+      if (!sessionDesktop.empty()) {
+        env.push_back({"XDG_SESSION_DESKTOP", sessionDesktop});
+      }
+    }
+
+    return env;
   }
 
 } // namespace greeter

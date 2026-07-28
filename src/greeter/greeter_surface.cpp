@@ -41,6 +41,7 @@
 #include <linux/input-event-codes.h>
 #include <nlohmann/json.hpp>
 #include <pwd.h>
+#include <sstream>
 #include <sys/types.h>
 #include <unordered_set>
 #include <wayland-client.h>
@@ -1421,10 +1422,43 @@ void GreeterSurface::beginSessionStart() {
   }
 
   GreetdSessionCommand cmd;
+  greeter::SessionOption session{.name = "Shell", .command = "/bin/sh", .desktopNames = {}, .sessionType = "tty"};
   if (!m_sessions.empty() && m_selectedSession < m_sessions.size()) {
-    cmd.command = m_sessions[m_selectedSession].command;
-  } else {
-    cmd.command = "/bin/sh";
+    session = m_sessions[m_selectedSession];
+  }
+
+  // greetd cmd is argv; Exec= may be multiple tokens (e.g. "dbus-run-session gnome-session").
+  {
+    std::istringstream stream(session.command);
+    std::string token;
+    if (!(stream >> token) || token.empty()) {
+      kLog.error("session '{}' has empty Exec", session.name);
+      m_authenticating = false;
+      resetAuthSession();
+      clearPasswordInput();
+      syncAuthInteractivity();
+      updateStatus("Failed to start session: empty command", true);
+      commitImmediateFrame(false);
+      return;
+    }
+    cmd.command = token;
+    while (stream >> token) {
+      cmd.arguments.push_back(token);
+    }
+  }
+  cmd.environment = greeter::sessionStartEnvironment(session);
+  {
+    std::string envSummary;
+    for (const auto& entry : cmd.environment) {
+      if (!envSummary.empty()) {
+        envSummary += ' ';
+      }
+      envSummary += entry.key + '=' + entry.value;
+    }
+    kLog.info(
+        "greetd: start_session session='{}' cmd='{}' args={} env=[{}]", session.name, cmd.command, cmd.arguments.size(),
+        envSummary
+    );
   }
 
   if (!m_greetdClient->requestStartSession(cmd)) {

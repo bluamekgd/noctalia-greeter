@@ -1,5 +1,7 @@
 #pragma once
 
+#include "greetd/greetd_client.h"
+
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -10,7 +12,12 @@ namespace greeter {
 
   struct SessionOption {
     std::string name;
+    // Desktop Entry Exec= with field codes stripped (may contain multiple argv tokens).
     std::string command;
+    // From DesktopNames= (desktop-entry ;-list). Empty when unset (synthetic Shell).
+    std::string desktopNames;
+    // "wayland" for wayland-sessions entries; "tty" for the synthetic Shell fallback.
+    std::string sessionType = "wayland";
   };
 
   [[nodiscard]] std::vector<SessionOption> discoverSessions();
@@ -18,5 +25,8 @@ namespace greeter {
   // Match Wayland .desktop Name=; comparison is case-insensitive.
   [[nodiscard]] std::optional<std::size_t>
   findSessionIndex(const std::vector<SessionOption>& sessions, std::string_view name);
+
+  // Env for greetd start_session (must be set before PAM opens the session).
+  [[nodiscard]] std::vector<GreetdEnvironmentEntry> sessionStartEnvironment(const SessionOption& session);
 
 } // namespace greeter

@@ -238,7 +238,7 @@ List valid session names:
 noctalia-greeter sessions
 ```
 
-Sessions come from `wayland-sessions` `.desktop` files under `/usr/share`, each path in `XDG_DATA_DIRS`, and on NixOS `/run/current-system/sw/share`.
+Sessions come from `wayland-sessions` `.desktop` files under `/usr/share`, each path in `XDG_DATA_DIRS`, and on NixOS `/run/current-system/sw/share`. On login the greeter passes `XDG_SESSION_TYPE=wayland` plus `XDG_CURRENT_DESKTOP` / `XDG_SESSION_DESKTOP` from `DesktopNames=` through greetd (before PAM), so logind sees a Wayland session. GNOME remains best-effort versus GDM.
 
 ### Multi-monitor
 
