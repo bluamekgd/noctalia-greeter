@@ -147,6 +147,7 @@ programs.noctalia-greeter = {
     cursor = {
       theme = "Bibata-Modern-Ice";
       size = 24;
+      # Theme packages are not on the default search path; point at share/icons.
       path = "${pkgs.bibata-cursors}/share/icons";
     };
     keyboard = {
@@ -162,8 +163,12 @@ The module enables greetd and sets the session command automatically.
 `--session <name>` to set a default session. Run `noctalia-greeter sessions`
 to list valid names.
 
-`settings` accepts a Nix attrset, a raw TOML string, or a path to a `.toml` file, 
-and is copied to `/var/lib/noctalia-greeter/greeter.toml` on boot.
+`settings` accepts a Nix attrset, a raw TOML string, or a path to a `.toml` file,
+and is copied to `/var/lib/noctalia-greeter/greeter.toml` on boot (via tmpfiles).
+Keys match `greeter.toml` tables (`cursor.theme` / `cursor.size` / `cursor.path`,
+`idle.timeout`, `keyboard.layout`, …). The module does **not** inject `XCURSOR_*`
+or other env vars into the greetd session command. Put those values in `settings`
+(or wrap `command` with `env` yourself if you prefer the environment fallback).
 
 ## Building and installing
 
@@ -210,7 +215,7 @@ The greeter needs the shipped `assets/` tree at runtime. Copying only the `nocta
 
 ## Setting up greetd
 
-Point greetd at the installed session wrapper. Use the path on your system — do not assume `/usr/local` if you installed from a package:
+Point greetd at the installed session wrapper. Use the path on your system - do not assume `/usr/local` if you installed from a package:
 
 ```sh
 which noctalia-greeter-session
@@ -278,6 +283,17 @@ scale = 1.5
 
 If `[output].scale` is missing or invalid, the compositor falls back to auto scaling.
 
+### Idle blanking
+
+By default the greeter never blanks the screen. Set `[idle].timeout` (seconds, `0`-`86400`) to turn off DRM outputs after idle input; `0` or omitting the key disables blanking. `NOCTALIA_GREETER_IDLE_TIMEOUT` on the greetd session command overrides the file when set.
+
+```toml
+[idle]
+timeout = 300
+```
+
+On NixOS: `programs.noctalia-greeter.settings.idle.timeout = 300;` (written to `greeter.toml`).
+
 List connector names from a running Wayland session:
 
 ```sh
@@ -304,7 +320,7 @@ sudo ./scripts/setup_greeter_system.sh
 just setup-log-dir
 ```
 
-On systemd (or opentmpfiles), installs also ship `/usr/lib/tmpfiles.d/noctalia-greeter.conf` so the state dir can be recreated with `systemd-tmpfiles --create` — that drop-in hardcodes the `greeter` user; use the setup script when your greetd user differs.
+On systemd (or opentmpfiles), installs also ship `/usr/lib/tmpfiles.d/noctalia-greeter.conf` so the state dir can be recreated with `systemd-tmpfiles --create`. That drop-in hardcodes the `greeter` user; use the setup script when your greetd user differs.
 
 Logging defaults to **syslog** under greetd (journald on systemd, metalog/syslog-ng/etc. on OpenRC). The session wrapper parks stdout/stderr so wlroots/libseat chatter does not flash the VT. Override with `NOCTALIA_GREETER_LOG=stderr` for console debugging, or `NOCTALIA_GREETER_LOG=/path` for a log file:
 
@@ -330,12 +346,17 @@ Admin-only settings in `greeter.toml` (set by you, not the UI):
 - `[user].default` - username to select on startup; opens the password step immediately (`--user` on the command line wins)
 - `[output].name` - Wayland connector name (see Multi-monitor)
 - `[output].layout` - multi-monitor positions as `NAME:X,Y; ...` in logical pixels (see Multi-monitor)
+- `[output].width` / `[output].height` - preferred DRM mode size in pixels
+- `[output].transforms` - per-connector DRM transform (`NAME:TOKEN; ...`, e.g. `90`, `flipped-270`)
 - `[output].scale` - manual compositor scale factor (e.g. `1.5`); invalid or missing → auto scale
+- `[idle].timeout` - seconds with no input before blanking outputs; `0` or omit disables (`0`-`86400`)
 - `[cursor].theme` - cursor theme name (e.g. `Adwaita`); missing → wlroots default cursor
 - `[cursor].size` - cursor size in pixels (e.g. `24`); missing → `24`
 - `[cursor].path` - colon-separated theme search path (sets `XCURSOR_PATH`)
 - `[keyboard].layout` / `.variant` / `.options` - XKB keymap (compositor)
+- `[keyboard].numlock` - start with Num Lock locked (`true` default / `false`)
 - `[appearance].password_style` - password mask style: `default` (filled circles) or `random` (cycled glyph shapes, same as Noctalia shell)
+- `[appearance].hide_logo` - hide the Noctalia logo on the login screen (`true`/`false`, default `false`)
 - `[auth].allow_empty_password` - allow submitting with an empty password field (`true`/`false`, default `false`); needed for PAM modules like fprintd or smartcard that handle authentication without a password (PAM expects an empty response to the password prompt)
 
 The greeter updates `[session].last` and `[appearance].scheme` when you change them in the UI.
@@ -358,7 +379,11 @@ command = "env XCURSOR_THEME=Adwaita XCURSOR_SIZE=24 /usr/bin/noctalia-greeter-s
 ```
 
 If the theme is not under the default search path, also set
-`XCURSOR_PATH` (or `cursor.path`) to the directory that contains it. 
+`XCURSOR_PATH` (or `cursor.path`) to the directory that contains it.
+
+On NixOS, set `programs.noctalia-greeter.settings.cursor` (writes `greeter.toml`);
+use `path = "${pkgs.<theme>}/share/icons"` for packaged themes. The module does not
+add a `package` option or wrap the greetd command with `XCURSOR_*`.
 
 ## Keyboard
 
@@ -407,7 +432,7 @@ command = "env XKB_DEFAULT_LAYOUT=cz /usr/bin/noctalia-greeter-session"
 | `Esc` | Close menu or leave password step |
 | `F3` | Session picker |
 | `F7` | Color scheme picker |
-| `Ctrl+Alt+F1`–`F12` | Switch to virtual terminal (TTY) |
+| `Ctrl+Alt+F1`-`F12` | Switch to virtual terminal (TTY) |
 
 ## Troubleshooting
 
