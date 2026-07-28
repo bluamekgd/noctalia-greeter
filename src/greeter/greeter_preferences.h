@@ -40,8 +40,11 @@ namespace greeter {
   // [output].layout in greeter.toml: "NAME:X,Y; ..." (logical pixels, compositor + client).
   [[nodiscard]] std::vector<GreeterOutputPlacement> loadGreeterOutputLayout();
 
-  // Sets [appearance].scheme to Synced; updates [output].layout only when stagedLayout is set.
-  [[nodiscard]] bool applyAppearanceSyncGreeterConf(const std::optional<std::string>& stagedOutputLayout);
+  // Sets [appearance].scheme to Synced; updates [output].layout / [output].transforms only when
+  // the corresponding staged value is set.
+  [[nodiscard]] bool applyAppearanceSyncGreeterConf(
+      const std::optional<std::string>& stagedOutputLayout, const std::optional<std::string>& stagedOutputTransforms
+  );
 
   // greetd/CLI default (--session / --cmd); overrides greeter.toml
   // default_session.

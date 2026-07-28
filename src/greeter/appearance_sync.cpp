@@ -5,8 +5,10 @@
 #include <cctype>
 #include <cerrno>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <sys/stat.h>
 #include <vector>
@@ -252,13 +254,15 @@ namespace greeter::appearance {
   }
 
   bool applySyncedGreeterPreferences(const std::filesystem::path& stagingDirectory, std::string& errorOut) {
-    std::optional<std::string> stagedOutputLayout;
-    const auto layoutPath = stagingDirectory / kOutputLayoutFileName;
-    std::error_code ec;
-    if (std::filesystem::is_regular_file(layoutPath, ec) && !ec) {
-      std::ifstream in(layoutPath);
+    auto readStagedText = [&](std::string_view fileName, std::optional<std::string>& out) -> bool {
+      const auto path = stagingDirectory / fileName;
+      std::error_code ec;
+      if (!std::filesystem::is_regular_file(path, ec) || ec) {
+        return true;
+      }
+      std::ifstream in(path);
       if (!in.is_open()) {
-        errorOut = std::string("failed to open staged '") + layoutPath.string() + "'";
+        errorOut = std::string("failed to open staged '") + path.string() + "'";
         return false;
       }
       std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -275,13 +279,23 @@ namespace greeter::appearance {
       }
       const std::string trimmed = raw.substr(begin, end - begin);
       if (trimmed.empty()) {
-        errorOut = "staged output_layout is empty";
+        errorOut = std::string("staged ") + std::string(fileName) + " is empty";
         return false;
       }
-      stagedOutputLayout = trimmed;
+      out = trimmed;
+      return true;
+    };
+
+    std::optional<std::string> stagedOutputLayout;
+    std::optional<std::string> stagedOutputTransforms;
+    if (!readStagedText(kOutputLayoutFileName, stagedOutputLayout)) {
+      return false;
+    }
+    if (!readStagedText(kOutputTransformsFileName, stagedOutputTransforms)) {
+      return false;
     }
 
-    if (!greeter::applyAppearanceSyncGreeterConf(stagedOutputLayout)) {
+    if (!greeter::applyAppearanceSyncGreeterConf(stagedOutputLayout, stagedOutputTransforms)) {
       errorOut = "failed to update greeter.toml after appearance sync";
       return false;
     }

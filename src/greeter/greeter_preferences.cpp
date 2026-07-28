@@ -125,6 +125,71 @@ namespace {
     return placements;
   }
 
+  [[nodiscard]] bool isValidOutputTransformToken(std::string_view token) {
+    return token == "normal"
+        || token == "0"
+        || token == "none"
+        || token == "90"
+        || token == "180"
+        || token == "270"
+        || token == "flipped"
+        || token == "flipped-90"
+        || token == "flipped_90"
+        || token == "flipped-180"
+        || token == "flipped_180"
+        || token == "flipped-270"
+        || token == "flipped_270";
+  }
+
+  [[nodiscard]] bool parseOutputTransformEntry(std::string_view token) {
+    const std::string trimmed = trim(token);
+    if (trimmed.empty()) {
+      return false;
+    }
+
+    const std::size_t colon = trimmed.rfind(':');
+    if (colon == std::string_view::npos || colon == 0) {
+      return false;
+    }
+
+    const std::string name = trim(trimmed.substr(0, colon));
+    const std::string value = trim(trimmed.substr(colon + 1));
+    return !name.empty() && isValidOutputTransformToken(value);
+  }
+
+  [[nodiscard]] std::size_t countValidOutputTransformEntries(std::string_view raw) {
+    std::size_t count = 0;
+    std::string normalized;
+    normalized.reserve(raw.size());
+    for (const char ch : raw) {
+      normalized.push_back(ch == ';' ? ' ' : ch);
+    }
+
+    std::size_t begin = 0;
+    while (begin < normalized.size()) {
+      while (begin < normalized.size() && std::isspace(static_cast<unsigned char>(normalized[begin])) != 0) {
+        ++begin;
+      }
+      if (begin >= normalized.size()) {
+        break;
+      }
+
+      std::size_t end = begin;
+      while (end < normalized.size() && std::isspace(static_cast<unsigned char>(normalized[end])) == 0) {
+        ++end;
+      }
+
+      if (parseOutputTransformEntry(normalized.substr(begin, end - begin))) {
+        ++count;
+      } else {
+        kLog.warn("ignoring invalid output transform entry '{}'", normalized.substr(begin, end - begin));
+      }
+      begin = end;
+    }
+
+    return count;
+  }
+
   [[nodiscard]] bool setPathMode(const std::filesystem::path& path, const mode_t mode, std::string& errorOut) {
     if (::chmod(path.c_str(), mode) != 0) {
       errorOut = std::string("chmod failed for '") + path.string() + "': " + std::strerror(errno);
@@ -195,7 +260,9 @@ namespace greeter {
     return parseOutputLayoutValue(*file.outputLayout);
   }
 
-  bool applyAppearanceSyncGreeterConf(const std::optional<std::string>& stagedOutputLayout) {
+  bool applyAppearanceSyncGreeterConf(
+      const std::optional<std::string>& stagedOutputLayout, const std::optional<std::string>& stagedOutputTransforms
+  ) {
     config::GreeterConfigFile file = config::loadConfig(greeterConfPath());
     file.appearanceScheme = appearance::kSyncedSchemeDisplayName;
     if (stagedOutputLayout.has_value()) {
@@ -204,6 +271,13 @@ namespace greeter {
         return false;
       }
       file.outputLayout = *stagedOutputLayout;
+    }
+    if (stagedOutputTransforms.has_value()) {
+      if (stagedOutputTransforms->empty() || countValidOutputTransformEntries(*stagedOutputTransforms) == 0) {
+        kLog.warn("refusing to apply invalid staged output transforms");
+        return false;
+      }
+      file.outputTransforms = *stagedOutputTransforms;
     }
     return config::writeConfig(greeterConfPath(), file);
   }

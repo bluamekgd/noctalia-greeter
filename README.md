@@ -251,11 +251,12 @@ name = "DP-2"
 
 The compositor disables the other connectors at the KMS level when `[output].name` is set. If it names a disconnected connector, the greeter falls back to mirroring on all outputs.
 
-When using multiple monitors, set `[output].layout` manually or sync from Noctalia Shell (see Matching Noctalia Shell). Without it, outputs are placed left-to-right by connector name. List connector names with `noctalia-greeter outputs`:
+When using multiple monitors, set `[output].layout` manually or sync from Noctalia Shell (see Matching Noctalia Shell). Without it, outputs are placed left-to-right by connector name. Portrait panels need `[output].transforms` (also synced from the shell) so the greeter UI is upright. List connector names with `noctalia-greeter outputs`:
 
 ```toml
 [output]
 layout = "DP-1:0,0; HDMI-A-1:1920,0; DP-2:3840,0"
+transforms = "DP-1:normal; HDMI-A-1:270"
 ```
 
 Coordinates are logical pixels from your desktop compositor. The greeter uses them for **order and row grouping**, then places outputs edge-to-edge at its own scale so the cursor can move between monitors.
@@ -319,7 +320,7 @@ On systemd, inspect greeter lines with `journalctl -u greetd` (or your greetd un
 
 ## Matching Noctalia Shell
 
-With [Noctalia v5](https://github.com/noctalia-dev/noctalia) installed, open **Settings → Shell → Security → Noctalia Greeter → Sync Now**. The shell copies your wallpaper, palette, and multi-monitor layout (when available) to the greeter (you may be prompted for admin credentials). After syncing, log out or restart greetd to see the changes on the login screen.
+With [Noctalia v5](https://github.com/noctalia-dev/noctalia) installed, open **Settings → Shell → Security → Noctalia Greeter → Sync Now**. The shell copies your wallpaper, palette, output transforms, and multi-monitor layout (when available) to the greeter (you may be prompted for admin credentials). After syncing, log out or restart greetd to see the changes on the login screen.
 
 The greeter adds a **Synced** color scheme when sync data is present. Session and scheme choices you make on the login screen are remembered in `/var/lib/noctalia-greeter/greeter.toml`.
 

@@ -15,6 +15,7 @@ namespace greeter::appearance {
   inline constexpr const char* kDefaultSyncedDataDir = "/var/lib/noctalia-greeter";
   inline constexpr const char* kManifestFileName = "appearance.json";
   inline constexpr const char* kOutputLayoutFileName = "output_layout";
+  inline constexpr const char* kOutputTransformsFileName = "output_transforms";
   inline constexpr const char* kGreeterTomlFileName = "greeter.toml";
   inline constexpr const char* kWallpaperBaseName = "wallpaper";
   inline constexpr const char* kSyncedSchemeDisplayName = "Synced";
@@ -35,8 +36,8 @@ namespace greeter::appearance {
   // Root-owned install into syncedDataDirectory(). No chown, no prefs.
   [[nodiscard]] bool installFromStaging(const std::filesystem::path& stagingDirectory, std::string& errorOut);
 
-  // Updates greeter.toml [appearance].scheme and optional staged [output].layout. Leaves layout
-  // unchanged when the staging file is absent.
+  // Updates greeter.toml [appearance].scheme and optional staged [output].layout /
+  // [output].transforms. Leaves either key unchanged when its staging file is absent.
   [[nodiscard]] bool
   applySyncedGreeterPreferences(const std::filesystem::path& stagingDirectory, std::string& errorOut);
 
