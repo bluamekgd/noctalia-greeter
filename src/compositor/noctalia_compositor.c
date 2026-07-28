@@ -199,9 +199,13 @@ static float dpi_from_axis(int pixels, int phys_mm) {
   return (float)pixels / ((float)phys_mm / 25.4f);
 }
 
-static float effective_dpi(const struct wlr_output* output) {
-  const float dpi_x = dpi_from_axis(output->width, output->phys_width);
-  const float dpi_y = dpi_from_axis(output->height, output->phys_height);
+// Before the first modeset, wlr_output->width/height are often 0; use the selected
+// mode size so cold boot and post-logout auto scale match.
+static float effective_dpi(const struct wlr_output* output, int mode_width, int mode_height) {
+  const int width = mode_width > 0 ? mode_width : output->width;
+  const int height = mode_height > 0 ? mode_height : output->height;
+  const float dpi_x = dpi_from_axis(width, output->phys_width);
+  const float dpi_y = dpi_from_axis(height, output->phys_height);
   if (dpi_x > 0.0f && dpi_y > 0.0f) {
     return (dpi_x + dpi_y) * 0.5f;
   }
@@ -214,26 +218,28 @@ static float effective_dpi(const struct wlr_output* output) {
   return 0.0f;
 }
 
-static float fallback_scale_for_resolution(const struct wlr_output* output) {
-  if (output->width >= 3840 || output->height >= 2160) {
+static float fallback_scale_for_resolution(int mode_width, int mode_height) {
+  if (mode_width >= 3840 || mode_height >= 2160) {
     return 1.5f;
   }
-  if (output->width >= 2560) {
+  if (mode_width >= 2560) {
     return 1.25f;
   }
   return 1.0f;
 }
 
-static float output_ui_scale(const struct wlr_output* output, float manual) {
+static float output_ui_scale(const struct wlr_output* output, float manual, int mode_width, int mode_height) {
   if (manual >= 1.0f) {
     return clamp_scale(manual);
   }
 
-  const float dpi = effective_dpi(output);
+  const float dpi = effective_dpi(output, mode_width, mode_height);
   if (dpi > 96.0f) {
     return clamp_scale(dpi / 96.0f);
   }
-  return clamp_scale(fallback_scale_for_resolution(output));
+  const int width = mode_width > 0 ? mode_width : output->width;
+  const int height = mode_height > 0 ? mode_height : output->height;
+  return clamp_scale(fallback_scale_for_resolution(width, height));
 }
 
 static bool parse_output_layout_entry(const char* token, struct greeter_output_placement* out) {
@@ -989,7 +995,9 @@ static bool commit_output_enabled(struct greeter_output* output) {
   }
   const enum wl_output_transform transform = transform_for_output(server, output->wlr_output->name);
   wlr_output_state_set_transform(&state, transform);
-  const float scale = output_ui_scale(output->wlr_output, server->manual_scale);
+  const int mode_width = mode != NULL ? mode->width : 0;
+  const int mode_height = mode != NULL ? mode->height : 0;
+  const float scale = output_ui_scale(output->wlr_output, server->manual_scale, mode_width, mode_height);
   wlr_output_state_set_scale(&state, scale);
   bool ok = wlr_output_commit_state(output->wlr_output, &state);
   wlr_output_state_finish(&state);
