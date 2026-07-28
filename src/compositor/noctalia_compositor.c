@@ -1477,13 +1477,21 @@ static void focus_mapped_views(struct greeter_server* server) {
 static void handle_keyboard_modifiers(struct wl_listener* listener, void* data) {
   (void)data;
   struct greeter_keyboard* keyboard = wl_container_of(listener, keyboard, modifiers);
-  wlr_seat_keyboard_notify_modifiers(keyboard->server->seat, &keyboard->wlr_keyboard->modifiers);
+  struct greeter_server* server = keyboard->server;
+  if (server->shutting_down || server->seat == NULL) {
+    return;
+  }
+  wlr_seat_keyboard_notify_modifiers(server->seat, &keyboard->wlr_keyboard->modifiers);
 }
 
 static void handle_keyboard_key(struct wl_listener* listener, void* data) {
   struct greeter_keyboard* keyboard = wl_container_of(listener, keyboard, key);
   struct greeter_server* server = keyboard->server;
   struct wlr_keyboard_key_event* event = data;
+
+  if (server->shutting_down || server->seat == NULL) {
+    return;
+  }
 
   if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED && server->session != NULL) {
     const xkb_keysym_t* syms;
@@ -1855,6 +1863,12 @@ static void remove_listener_if_set(struct wl_listener* listener) {
 
 static void cleanup_server_listeners(struct greeter_server* server) {
   server->shutting_down = true;
+  // wlr_keyboard_finish synthesizes releases for held keys during backend
+  // teardown. Detach the seat keyboard before teardown; the event handlers
+  // above also ignore those late events.
+  if (server->seat != NULL) {
+    wlr_seat_set_keyboard(server->seat, NULL);
+  }
   remove_listener_if_set(&server->new_output);
   remove_listener_if_set(&server->new_input);
   remove_listener_if_set(&server->new_toplevel);
