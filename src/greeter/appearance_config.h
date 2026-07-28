@@ -26,6 +26,8 @@ struct GreeterSyncedAppearance {
   // connector name -> wallpaper (from appearance.json "wallpapers")
   std::unordered_map<std::string, GreeterOutputWallpaper> wallpapersByOutput;
   float cornerRadiusScale = 1.0f;
+  // From appearance.json "font_family"; empty means leave the greeter default.
+  std::string fontFamily;
 
   [[nodiscard]] GreeterOutputWallpaper wallpaperForOutput(std::string_view outputName) const {
     if (!outputName.empty()) {

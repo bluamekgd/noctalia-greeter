@@ -38,8 +38,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <nlohmann/json.hpp>
 #include <linux/input-event-codes.h>
+#include <nlohmann/json.hpp>
 #include <pwd.h>
 #include <sys/types.h>
 #include <unordered_set>
@@ -1673,6 +1673,9 @@ void GreeterSurface::applyScheme(const std::size_t schemeIndex) {
 
     setPalette(m_syncedAppearance->palette);
     Style::setCornerRadiusScale(m_syncedAppearance->cornerRadiusScale);
+    if (m_renderContext != nullptr && !m_syncedAppearance->fontFamily.empty()) {
+      m_renderContext->setTextFontFamily(m_syncedAppearance->fontFamily);
+    }
     const auto wallpaper = m_syncedAppearance->wallpaperForOutput(m_boundOutputName);
     m_wallpaperPath = wallpaper.path;
     m_wallpaperFillMode = wallpaper.fillMode;

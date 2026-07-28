@@ -1,6 +1,7 @@
 #include "greeter/greeter.h"
 
 #include "core/log.h"
+#include "greeter/appearance_config.h"
 #include "greeter/greeter_preferences.h"
 #include "greeter/greeter_surface.h"
 #include "greeter/greeter_window.h"
@@ -77,6 +78,9 @@ bool Greeter::initialize(WaylandClient& client) {
 
   m_renderContext = std::make_unique<RenderContext>();
   m_renderContext->initialize(m_glSharedContext);
+  if (const auto synced = loadGreeterSyncedAppearance(); synced.has_value() && !synced->fontFamily.empty()) {
+    m_renderContext->setTextFontFamily(synced->fontFamily);
+  }
 
   connectGreetd();
 
