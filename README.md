@@ -157,7 +157,8 @@ programs.noctalia-greeter = {
 };
 ```
 
-The module enables greetd and sets the session command automatically.
+The module enables greetd and sets the session command automatically. It also enables
+`accounts-daemon` by default (user avatars on the login screen).
 
 `greeter-args` passes extra flags to `noctalia-greeter-session`, for example
 `--session <name>` to set a default session. Run `noctalia-greeter sessions`
@@ -166,7 +167,7 @@ to list valid names.
 `settings` accepts a Nix attrset, a raw TOML string, or a path to a `.toml` file,
 and is copied to `/var/lib/noctalia-greeter/greeter.toml` on boot (via tmpfiles).
 Keys match `greeter.toml` tables (`cursor.theme` / `cursor.size` / `cursor.path`,
-`idle.timeout`, `keyboard.layout`, …). The module does **not** inject `XCURSOR_*`
+`idle.timeout`, `keyboard.layout`, and so on). The module does **not** inject `XCURSOR_*`
 or other env vars into the greetd session command. Put those values in `settings`
 (or wrap `command` with `env` yourself if you prefer the environment fallback).
 
@@ -247,7 +248,7 @@ Sessions come from `wayland-sessions` `.desktop` files under `/usr/share`, each 
 
 ### Multi-monitor
 
-By default the greeter is **mirrored on every connected monitor** (same UI on each display, sized to the primary output). To pin it to a single connector, set `[output].name` in `/var/lib/noctalia-greeter/greeter.toml`:
+By default the greeter is **mirrored on every connected monitor** (same UI on each display, each sized to that output's own resolution and scale). To pin it to a single connector, set `[output].name` in `/var/lib/noctalia-greeter/greeter.toml`:
 
 ```toml
 [output]
@@ -336,9 +337,21 @@ On systemd, inspect greeter lines with `journalctl -u greetd` (or your greetd un
 
 ## Matching Noctalia Shell
 
-With [Noctalia v5](https://github.com/noctalia-dev/noctalia) installed, open **Settings → Shell → Security → Noctalia Greeter → Sync Now**. The shell copies your wallpaper, palette, output transforms, and multi-monitor layout (when available) to the greeter (you may be prompted for admin credentials). After syncing, log out or restart greetd to see the changes on the login screen.
+With [Noctalia v5](https://github.com/noctalia-dev/noctalia) installed, open **Settings → Security → Noctalia Greeter → Sync Now**. The shell stages and installs:
+
+- wallpaper (including per-output wallpapers when configured)
+- palette and theme mode
+- corner radius scale (`shell.corner_radius_scale`)
+- shell font (`shell.font_family`)
+- session panel actions and power command overrides (`shell.session`)
+- monitor orientation (`[output].transforms` in `greeter.toml`)
+- multi-monitor layout (`[output].layout`, when more than one ready output reports distinct positions)
+
+You may be prompted for admin credentials (`pkexec` / `run0`, or `[shell.greeter_sync].privilege_command`). Enable **Settings → Security → Auto-Sync Greeter** to sync automatically after wallpaper, theme/color, or shell font changes (debounced). After syncing, log out or restart greetd to see the changes on the login screen.
 
 The greeter adds a **Synced** color scheme when sync data is present. Session and scheme choices you make on the login screen are remembered in `/var/lib/noctalia-greeter/greeter.toml`.
+
+User avatars are not part of appearance sync; they come from AccountsService (`accounts-daemon`).
 
 Admin-only settings in `greeter.toml` (set by you, not the UI):
 
@@ -412,7 +425,7 @@ layout = "us,cz"
 options = "grp:alt_shift_toggle"
 ```
 
-Use standard [XKB layout codes](https://www.freedesktop.org/wiki/Software/XKeyboard-config/Rules/) (`de`, `fr`, `ru`, …).
+Use standard [XKB layout codes](https://www.freedesktop.org/wiki/Software/XKeyboard-config/Rules/) (`de`, `fr`, `ru`, ...).
 
 greetd starts greeters with an empty environment, so set layout in `greeter.toml` or prefix the greetd session command:
 
