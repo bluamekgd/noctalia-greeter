@@ -1,0 +1,122 @@
+name: Bug Report
+description: Report a bug or regression in noctalia-greeter
+title: "[BUG] "
+labels: ["bug"]
+
+body:
+  - type: checkboxes
+    id: submission-checklist
+    attributes:
+      label: Submission checklist
+      description: Please confirm the following before submitting.
+      options:
+        - label: I have searched existing issues and confirmed this is not a duplicate.
+          required: true
+        - label: I am using the latest available version of noctalia-greeter.
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: A clear and concise description of the issue.
+      placeholder: Describe the problem...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Steps required to reproduce the issue.
+      placeholder: |
+        1. Set `[output].layout` in greeter.toml to ...
+        2. Restart greetd
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: |
+        Paste any relevant logs, terminal output, or stack traces here.
+
+        Examples:
+        - `journalctl -u greetd` (syslog identifier `noctalia-greeter`)
+        - `NOCTALIA_GREETER_LOG=stderr` output
+        - greetd / PAM errors
+
+        Large outputs can be wrapped in a `<details>` block.
+      render: text
+
+  - type: input
+    id: greeter-version
+    attributes:
+      label: noctalia-greeter version
+      description: Enter the version shown by the package, or the commit hash if you are running a development build.
+      placeholder: "v1.x.x (commit hash)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: distribution
+    attributes:
+      label: Distribution
+      description: Select the Linux distribution family where the issue occurs.
+      options:
+        - Arch-based
+        - Fedora-based
+        - Debian-based
+        - Gentoo-based
+        - NixOS
+        - openSUSE-based
+        - Void
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment information
+      description: |
+        Please provide relevant system information:
+
+        If you selected `Other` for distribution, please specify the exact one here.
+        - Installation method: e.g. AUR, source build, Nix
+        - greetd user: e.g. `greeter`
+        - GPU / driver: e.g. AMD RX 7800 XT (amdgpu)
+        - Monitor setup: single / multi-monitor, connector names if relevant
+        - Relevant `greeter.toml` / `sync.toml` snippets (redact secrets)
+      placeholder: |
+        Installation method: e.g. AUR, source build, Nix
+        greetd user: greeter
+        GPU: e.g. AMD RX 7800 XT (amdgpu)
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: |
+        Add any other context, screenshots, or relevant information here.

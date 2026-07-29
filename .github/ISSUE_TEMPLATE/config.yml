@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Noctalia Discord
+    url: https://discord.noctalia.dev
+    about: Join the community for support, discussions, and quick help.
+  - name: Noctalia Docs - Greeter
+    url: https://docs.noctalia.dev/v5/greeter/
+    about: Browse greeter configuration, setup, and troubleshooting guides.
