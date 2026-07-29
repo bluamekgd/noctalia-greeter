@@ -42,9 +42,9 @@ in
         ];
       default = { };
       description = ''
-        Full declarative greeter.toml (overwritten on every activation via tmpfiles C+).
-        Configure everything here: session/user defaults, appearance (scheme, palette,
-        wallpaper, font, ...), output, idle, cursor, keyboard, auth.
+        Full declarative greeter.toml, symlinked into the Nix store and replaced on every
+        activation. Configure everything here: session/user defaults, appearance (scheme,
+        palette, wallpaper, font, ...), output, idle, cursor, keyboard, auth.
         Sync/UI mutable data lives in sync.toml and is not managed by this option.
         Accepts a Nix attrset, raw TOML string, or path to a `.toml` file.
         See examples/greeter.toml in the noctalia-greeter repository.
@@ -91,10 +91,9 @@ in
         };
       }
       // lib.optionalAttrs (cfg.settings != { }) {
-        "/var/lib/noctalia-greeter/greeter.toml"."C+" = {
+        "/var/lib/noctalia-greeter/greeter.toml"."L+" = {
           argument = "${generateToml "greeter.toml" cfg.settings}";
           inherit user group;
-          mode = "0644";
         };
       };
 
