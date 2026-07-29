@@ -630,26 +630,7 @@ static int layout_extents_max_x(struct greeter_server* server) {
 
 static bool layout_output_at(struct greeter_output* output, int layout_x, int layout_y);
 
-struct configured_layout_entry {
-  struct greeter_output* output;
-  struct greeter_output_placement cfg;
-};
-
-static int compare_configured_layout_entry(const void* a, const void* b) {
-  const struct configured_layout_entry* ea = a;
-  const struct configured_layout_entry* eb = b;
-  if (ea->cfg.y != eb->cfg.y) {
-    return ea->cfg.y - eb->cfg.y;
-  }
-  if (ea->cfg.x != eb->cfg.x) {
-    return ea->cfg.x - eb->cfg.x;
-  }
-  return strcmp(ea->cfg.name, eb->cfg.name);
-}
-
 static void layout_outputs_from_config(struct greeter_server* server) {
-  struct configured_layout_entry entries[16];
-  size_t count = 0;
   for (size_t i = 0; i < server->output_placement_count; ++i) {
     const struct greeter_output_placement* cfg = &server->output_placements[i];
     struct greeter_output* output = output_by_name(server, cfg->name);
@@ -657,46 +638,17 @@ static void layout_outputs_from_config(struct greeter_server* server) {
       wlr_log(WLR_INFO, "output_layout: '%s' not connected", cfg->name);
       continue;
     }
-    entries[count].output = output;
-    entries[count].cfg = *cfg;
-    ++count;
-  }
-  if (count == 0) {
-    return;
-  }
-
-  qsort(entries, count, sizeof(entries[0]), compare_configured_layout_entry);
-
-  int row_cfg_y = entries[0].cfg.y;
-  int layout_x = 0;
-  int layout_y = 0;
-  int row_max_effective_height = 0;
-  for (size_t i = 0; i < count; ++i) {
-    if (i > 0 && entries[i].cfg.y != row_cfg_y) {
-      layout_y += row_max_effective_height;
-      layout_x = 0;
-      row_cfg_y = entries[i].cfg.y;
-      row_max_effective_height = 0;
-    }
-
-    if (!layout_output_at(entries[i].output, layout_x, layout_y)) {
+    if (!layout_output_at(output, cfg->x, cfg->y)) {
       continue;
     }
 
     int effective_width = 0;
     int effective_height = 0;
-    wlr_output_effective_resolution(entries[i].output->wlr_output, &effective_width, &effective_height);
+    wlr_output_effective_resolution(output->wlr_output, &effective_width, &effective_height);
     wlr_log(
-        WLR_INFO, "greeter output: %s at (%d,%d) (configured %s:%d,%d; effective %dx%d)", entries[i].cfg.name, layout_x,
-        layout_y, entries[i].cfg.name, entries[i].cfg.x, entries[i].cfg.y, effective_width, effective_height
+        WLR_INFO, "greeter output: %s at (%d,%d) (effective %dx%d)", cfg->name, cfg->x, cfg->y, effective_width,
+        effective_height
     );
-
-    if (effective_height > row_max_effective_height) {
-      row_max_effective_height = effective_height;
-    }
-    if (effective_width > 0) {
-      layout_x += effective_width;
-    }
   }
 
   int fallback_x = layout_extents_max_x(server);
