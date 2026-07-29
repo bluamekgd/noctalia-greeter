@@ -3,6 +3,7 @@
 #include "core/log.h"
 #include "greeter/appearance_sync.h"
 #include "greeter/greeter_config_store.h"
+#include "greeter/privileged_state_paths.h"
 
 #include <cctype>
 #include <cerrno>
@@ -191,11 +192,7 @@ namespace {
   }
 
   [[nodiscard]] bool setPathMode(const std::filesystem::path& path, const mode_t mode, std::string& errorOut) {
-    if (::chmod(path.c_str(), mode) != 0) {
-      errorOut = std::string("chmod failed for '") + path.string() + "': " + std::strerror(errno);
-      return false;
-    }
-    return true;
+    return greeter::privileged_state::setMode(path, mode, errorOut);
   }
 
   [[nodiscard]] bool
@@ -205,11 +202,7 @@ namespace {
       errorOut = "account '" + account + "' does not exist";
       return false;
     }
-    if (::chown(path.c_str(), pw->pw_uid, pw->pw_gid) != 0) {
-      errorOut = std::string("chown failed for '") + path.string() + "': " + std::strerror(errno);
-      return false;
-    }
-    return true;
+    return greeter::privileged_state::setOwnership(path, pw->pw_uid, pw->pw_gid, errorOut);
   }
 
   constexpr const char* kLegacyStateTomlFileName = "state.toml";
@@ -328,6 +321,14 @@ namespace greeter {
       const std::optional<std::string>& stagedOutputLayout, const std::optional<std::string>& stagedOutputTransforms,
       const std::optional<GreeterSyncAppearanceUpdate>& appearanceUpdate
   ) {
+    if (::geteuid() == 0) {
+      std::string error;
+      if (!greeter::privileged_state::removeSymlinkIfPresent(greeterSyncPath(), error)) {
+        kLog.error("{}", error);
+        return false;
+      }
+    }
+
     migrateLegacyRuntimeKeysToSync();
     config::GreeterSyncFile sync = config::loadSync(greeterSyncPath());
     sync.appearanceScheme = appearance::kSyncedSchemeDisplayName;
@@ -413,6 +414,9 @@ namespace greeter {
 
     const auto confPath = greeterConfPath();
     const bool confExisted = std::filesystem::exists(confPath, ec) && !ec;
+    if (!greeter::privileged_state::removeSymlinkIfPresent(confPath, errorOut)) {
+      return false;
+    }
     const config::GreeterConfigFile file = config::loadConfig(confPath);
     if (!config::writeConfig(confPath, file)) {
       errorOut = "failed to write greeter.toml";
@@ -427,6 +431,9 @@ namespace greeter {
 
     migrateLegacyRuntimeKeysToSync();
     const auto syncPath = greeterSyncPath();
+    if (!greeter::privileged_state::removeSymlinkIfPresent(syncPath, errorOut)) {
+      return false;
+    }
     if (!std::filesystem::is_regular_file(syncPath, ec) || ec) {
       if (!config::writeSync(syncPath, {})) {
         errorOut = "failed to write sync.toml";

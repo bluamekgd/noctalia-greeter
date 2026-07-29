@@ -3,6 +3,7 @@
 #include "core/log.h"
 #include "greeter/greetd_user.h"
 #include "greeter/greeter_preferences.h"
+#include "greeter/privileged_state_paths.h"
 
 #include <cctype>
 #include <cerrno>
@@ -35,22 +36,24 @@ namespace greeter::appearance {
           || (name.size() > kDash.size() && name.substr(0, kDash.size()) == kDash);
     }
 
-    [[nodiscard]] bool setMode(const std::filesystem::path& path, mode_t mode, std::string& errorOut) {
-      if (::chmod(path.c_str(), mode) != 0) {
-        errorOut = std::string("chmod failed for '") + path.string() + "': " + std::strerror(errno);
-        return false;
-      }
-      return true;
-    }
-
-    [[nodiscard]] bool setPathOwnership(
-        const std::filesystem::path& path, const greeter::GreeterAccountOwnership& owner, std::string& errorOut
+    [[nodiscard]] bool installRegularFile(
+        const std::filesystem::path& source, const std::filesystem::path& destination, mode_t mode,
+        std::string& errorOut
     ) {
-      if (::chown(path.c_str(), owner.uid, owner.gid) != 0) {
-        errorOut = std::string("chown failed for '") + path.string() + "': " + std::strerror(errno);
+      if (::geteuid() == 0) {
+        if (!greeter::privileged_state::removeSymlinkIfPresent(destination, errorOut)) {
+          return false;
+        }
+      }
+
+      std::error_code ec;
+      std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing, ec);
+      if (ec) {
+        errorOut =
+            std::string("failed to copy '") + source.string() + "' to '" + destination.string() + "': " + ec.message();
         return false;
       }
-      return true;
+      return greeter::privileged_state::setMode(destination, mode, errorOut);
     }
 
     [[nodiscard]] bool validatePaletteObject(const nlohmann::json& palette, std::string& errorOut) {
@@ -66,20 +69,6 @@ namespace greeter::appearance {
         }
       }
       return true;
-    }
-
-    [[nodiscard]] bool installRegularFile(
-        const std::filesystem::path& source, const std::filesystem::path& destination, mode_t mode,
-        std::string& errorOut
-    ) {
-      std::error_code ec;
-      std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing, ec);
-      if (ec) {
-        errorOut =
-            std::string("failed to copy '") + source.string() + "' to '" + destination.string() + "': " + ec.message();
-        return false;
-      }
-      return setMode(destination, mode, errorOut);
     }
 
     [[nodiscard]] bool removeInstalledWallpapers(const std::filesystem::path& syncedDir, std::string& errorOut) {
@@ -369,7 +358,7 @@ namespace greeter::appearance {
       errorOut = std::string("failed to create '") + destination.string() + "': " + ec.message();
       return false;
     }
-    if (!setMode(destination, kSyncedDirMode, errorOut)) {
+    if (!greeter::privileged_state::setMode(destination, kSyncedDirMode, errorOut)) {
       return false;
     }
 
@@ -387,6 +376,11 @@ namespace greeter::appearance {
     // appearance.json is legacy; palette/wallpaper/session data is merged into sync.toml by
     // applySyncedGreeterPreferences instead. Drop any stale live copy from an older release.
     const auto legacyManifest = manifestPath();
+    if (::geteuid() == 0) {
+      if (!greeter::privileged_state::removeSymlinkIfPresent(legacyManifest, errorOut)) {
+        return false;
+      }
+    }
     if (std::filesystem::is_regular_file(legacyManifest, ec) && !ec) {
       std::filesystem::remove(legacyManifest, ec);
       if (ec) {
@@ -487,14 +481,14 @@ namespace greeter::appearance {
 
     std::error_code ec;
     if (std::filesystem::exists(destination, ec) && !ec) {
-      if (!setPathOwnership(destination, *owner, errorOut)) {
+      if (!greeter::privileged_state::setOwnership(destination, owner->uid, owner->gid, errorOut)) {
         return false;
       }
     }
 
     const auto syncPath = syncConfPath();
     if (std::filesystem::is_regular_file(syncPath, ec) && !ec) {
-      if (!setPathOwnership(syncPath, *owner, errorOut)) {
+      if (!greeter::privileged_state::setOwnership(syncPath, owner->uid, owner->gid, errorOut)) {
         return false;
       }
     }
@@ -515,7 +509,7 @@ namespace greeter::appearance {
       if (!isWallpaperFileName(name)) {
         continue;
       }
-      if (!setPathOwnership(entry.path(), *owner, errorOut)) {
+      if (!greeter::privileged_state::setOwnership(entry.path(), owner->uid, owner->gid, errorOut)) {
         return false;
       }
     }
