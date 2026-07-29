@@ -143,11 +143,12 @@ programs.noctalia-greeter = {
 
   # Optional configuration
   greeter-args = "";
+  # Full declarative greeter.toml (overwritten on each activation).
+  # See examples/greeter.toml for every key (appearance.palette, output, …).
   settings = {
     cursor = {
       theme = "Bibata-Modern-Ice";
       size = 24;
-      # Theme packages are not on the default search path; point at share/icons.
       path = "${pkgs.bibata-cursors}/share/icons";
     };
     keyboard = {
@@ -164,12 +165,11 @@ The module enables greetd and sets the session command automatically. It also en
 `--session <name>` to set a default session. Run `noctalia-greeter sessions`
 to list valid names.
 
-`settings` accepts a Nix attrset, a raw TOML string, or a path to a `.toml` file,
-and is copied to `/var/lib/noctalia-greeter/greeter.toml` on boot (via tmpfiles).
-Keys match `greeter.toml` tables (`cursor.theme` / `cursor.size` / `cursor.path`,
-`idle.timeout`, `keyboard.layout`, and so on). The module does **not** inject `XCURSOR_*`
-or other env vars into the greetd session command. Put those values in `settings`
-(or wrap `command` with `env` yourself if you prefer the environment fallback).
+`settings` writes `/var/lib/noctalia-greeter/greeter.toml` (full declarative config,
+including appearance/palette when you set them). Sync/UI mutable data lives in
+`sync.toml` (not managed by Nix). Full docs:
+**[docs.noctalia.dev/v5/greeter](https://docs.noctalia.dev/v5/greeter/)**.
+Commented example: [`examples/greeter.toml`](examples/greeter.toml).
 
 ## Building and installing
 
@@ -337,42 +337,9 @@ On systemd, inspect greeter lines with `journalctl -u greetd` (or your greetd un
 
 ## Matching Noctalia Shell
 
-With [Noctalia v5](https://github.com/noctalia-dev/noctalia) installed, open **Settings → Security → Noctalia Greeter → Sync Now**. The shell stages and installs:
+With [Noctalia v5](https://github.com/noctalia-dev/noctalia) installed, open **Settings → Security → Noctalia Greeter → Sync Now**. Sync stages a `sync.toml` fragment plus wallpaper files, then `noctalia-greeter-apply-appearance` installs the images and merges into live `sync.toml`. Declarative `greeter.toml` is never overwritten by Sync; keys set there win over Sync.
 
-- wallpaper (including per-output wallpapers when configured)
-- palette and theme mode
-- corner radius scale (`shell.corner_radius_scale`)
-- shell font (`shell.font_family`)
-- session panel actions and power command overrides (`shell.session`)
-- monitor orientation (`[output].transforms` in `greeter.toml`)
-- multi-monitor layout (`[output].layout`, when more than one ready output reports distinct positions)
-
-You may be prompted for admin credentials (`pkexec` / `run0`, or `[shell.greeter_sync].privilege_command`). Enable **Settings → Security → Auto-Sync Greeter** to sync automatically after wallpaper, theme/color, or shell font changes (debounced). After syncing, log out or restart greetd to see the changes on the login screen.
-
-The greeter adds a **Synced** color scheme when sync data is present. Session and scheme choices you make on the login screen are remembered in `/var/lib/noctalia-greeter/greeter.toml`.
-
-User avatars are not part of appearance sync; they come from AccountsService (`accounts-daemon`).
-
-Admin-only settings in `greeter.toml` (set by you, not the UI):
-
-- `[session].default` - session selected when the greeter opens (overrides last-used unless you pass `--session` on the command line)
-- `[user].default` - username to select on startup; opens the password step immediately (`--user` on the command line wins)
-- `[output].name` - Wayland connector name (see Multi-monitor)
-- `[output].layout` - multi-monitor positions as `NAME:X,Y; ...` in logical pixels (see Multi-monitor)
-- `[output].width` / `[output].height` - preferred DRM mode size in pixels
-- `[output].transforms` - per-connector DRM transform (`NAME:TOKEN; ...`, e.g. `90`, `flipped-270`)
-- `[output].scale` - manual compositor scale factor (e.g. `1.5`); invalid or missing → auto scale
-- `[idle].timeout` - seconds with no input before blanking outputs; `0` or omit disables (`0`-`86400`)
-- `[cursor].theme` - cursor theme name (e.g. `Adwaita`); missing → wlroots default cursor
-- `[cursor].size` - cursor size in pixels (e.g. `24`); missing → `24`
-- `[cursor].path` - colon-separated theme search path (sets `XCURSOR_PATH`)
-- `[keyboard].layout` / `.variant` / `.options` - XKB keymap (compositor)
-- `[keyboard].numlock` - start with Num Lock locked (`true` default / `false`)
-- `[appearance].password_style` - password mask style: `default` (filled circles) or `random` (cycled glyph shapes, same as Noctalia shell)
-- `[appearance].hide_logo` - hide the Noctalia logo on the login screen (`true`/`false`, default `false`)
-- `[auth].allow_empty_password` - allow submitting with an empty password field (`true`/`false`, default `false`); needed for PAM modules like fprintd or smartcard that handle authentication without a password (PAM expects an empty response to the password prompt)
-
-The greeter updates `[session].last` and `[appearance].scheme` when you change them in the UI.
+Full Sync payload, admin keys, cursor/keyboard, and troubleshooting: **[Greeter docs](https://docs.noctalia.dev/v5/greeter/)**.
 
 ## Cursor theme
 

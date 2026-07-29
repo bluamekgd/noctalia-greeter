@@ -3,13 +3,16 @@
 #include "core/log.h"
 
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <pwd.h>
 #include <string>
 #include <string_view>
+#include <sys/stat.h>
 #include <vector>
 
 namespace {
@@ -164,6 +167,31 @@ namespace greeter {
     }
 
     return std::nullopt;
+  }
+
+  std::optional<GreeterAccountOwnership>
+  resolveDataDirOwnership(const std::filesystem::path& dataDir, std::string& errorOut) {
+    errorOut.clear();
+    std::error_code ec;
+    if (std::filesystem::exists(dataDir, ec) && !ec) {
+      struct stat st{};
+      if (::stat(dataDir.c_str(), &st) == 0 && st.st_uid != 0) {
+        return GreeterAccountOwnership{st.st_uid, st.st_gid};
+      }
+    }
+
+    const auto account = resolveGreeterAccountName();
+    if (!account.has_value()) {
+      errorOut = "could not resolve greeter account for synced data ownership";
+      return std::nullopt;
+    }
+
+    struct passwd* pw = ::getpwnam(account->c_str());
+    if (pw == nullptr) {
+      errorOut = "account '" + *account + "' does not exist";
+      return std::nullopt;
+    }
+    return GreeterAccountOwnership{pw->pw_uid, pw->pw_gid};
   }
 
 } // namespace greeter

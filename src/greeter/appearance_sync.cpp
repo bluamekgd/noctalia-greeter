@@ -1,5 +1,7 @@
 #include "greeter/appearance_sync.h"
 
+#include "core/log.h"
+#include "greeter/greetd_user.h"
 #include "greeter/greeter_preferences.h"
 
 #include <cctype>
@@ -11,12 +13,14 @@
 #include <optional>
 #include <string>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 namespace greeter::appearance {
 
   namespace {
 
+    constexpr Logger kLog("greeter-appearance-sync");
     constexpr mode_t kSyncedDirMode = S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
     constexpr mode_t kSyncedFileMode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
 
@@ -34,6 +38,16 @@ namespace greeter::appearance {
     [[nodiscard]] bool setMode(const std::filesystem::path& path, mode_t mode, std::string& errorOut) {
       if (::chmod(path.c_str(), mode) != 0) {
         errorOut = std::string("chmod failed for '") + path.string() + "': " + std::strerror(errno);
+        return false;
+      }
+      return true;
+    }
+
+    [[nodiscard]] bool setPathOwnership(
+        const std::filesystem::path& path, const greeter::GreeterAccountOwnership& owner, std::string& errorOut
+    ) {
+      if (::chown(path.c_str(), owner.uid, owner.gid) != 0) {
+        errorOut = std::string("chown failed for '") + path.string() + "': " + std::strerror(errno);
         return false;
       }
       return true;
@@ -112,7 +126,122 @@ namespace greeter::appearance {
       return files;
     }
 
+    [[nodiscard]] std::optional<std::string>
+    manifestOptionalString(const nlohmann::json& object, std::string_view key) {
+      const auto it = object.find(std::string(key));
+      if (it == object.end() || !it->is_string()) {
+        return std::nullopt;
+      }
+      const std::string value = it->get<std::string>();
+      return value.empty() ? std::nullopt : std::make_optional(value);
+    }
+
+    [[nodiscard]] config::GreeterTomlWallpaper parseManifestWallpaperObject(const nlohmann::json& wallpaper) {
+      config::GreeterTomlWallpaper out;
+      out.path = manifestOptionalString(wallpaper, "path");
+      out.fillMode = manifestOptionalString(wallpaper, "fill_mode");
+      out.fillColor = manifestOptionalString(wallpaper, "fill_color");
+      return out;
+    }
+
+    [[nodiscard]] std::optional<config::GreeterSyncFile::SyncSessionAction>
+    parseManifestSessionAction(const nlohmann::json& item) {
+      if (!item.is_object()) {
+        return std::nullopt;
+      }
+      const auto action = manifestOptionalString(item, "action");
+      if (!action.has_value()) {
+        return std::nullopt;
+      }
+      config::GreeterSyncFile::SyncSessionAction row;
+      row.action = *action;
+      row.command = manifestOptionalString(item, "command");
+      row.label = manifestOptionalString(item, "label");
+      row.glyph = manifestOptionalString(item, "glyph");
+      return row;
+    }
+
   } // namespace
+
+  std::optional<ManifestSyncPayload> parseManifestForSync(const std::filesystem::path& path) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec) || ec) {
+      return std::nullopt;
+    }
+
+    std::ifstream in(path);
+    if (!in.is_open()) {
+      kLog.warn("failed to open appearance manifest '{}'", path.string());
+      return std::nullopt;
+    }
+
+    try {
+      const auto root = nlohmann::json::parse(in);
+      if (!root.is_object()) {
+        return std::nullopt;
+      }
+
+      const int version = root.value("version", 0);
+      if (version != kManifestVersion) {
+        kLog.warn("unsupported appearance manifest version {} in '{}'", version, path.string());
+        return std::nullopt;
+      }
+
+      ManifestSyncPayload payload;
+
+      const auto paletteIt = root.find("palette");
+      if (paletteIt == root.end() || !paletteIt->is_object()) {
+        kLog.warn("appearance manifest '{}' is missing palette", path.string());
+        return std::nullopt;
+      }
+      for (const auto& [key, value] : paletteIt->items()) {
+        if (value.is_string()) {
+          payload.appearance.palette[key] = value.get<std::string>();
+        }
+      }
+      if (!payload.appearance.hasCompletePalette()) {
+        kLog.warn("appearance manifest '{}' has incomplete palette", path.string());
+        return std::nullopt;
+      }
+
+      payload.appearance.themeMode = manifestOptionalString(root, "theme_mode");
+      if (const auto scaleIt = root.find("corner_radius_scale"); scaleIt != root.end() && scaleIt->is_number()) {
+        payload.appearance.cornerRadiusScale = scaleIt->get<float>();
+      }
+      payload.appearance.fontFamily = manifestOptionalString(root, "font_family");
+
+      if (const auto wallpaperIt = root.find("wallpaper"); wallpaperIt != root.end() && wallpaperIt->is_object()) {
+        payload.appearance.wallpaper = parseManifestWallpaperObject(*wallpaperIt);
+      }
+      if (const auto wallpapersIt = root.find("wallpapers"); wallpapersIt != root.end() && wallpapersIt->is_object()) {
+        for (const auto& [connector, value] : wallpapersIt->items()) {
+          if (value.is_object() && !connector.empty()) {
+            payload.appearance.wallpapers[connector] = parseManifestWallpaperObject(value);
+          }
+        }
+      }
+
+      if (const auto sessionIt = root.find("session"); sessionIt != root.end() && sessionIt->is_object()) {
+        if (const auto powerIt = sessionIt->find("power"); powerIt != sessionIt->end() && powerIt->is_object()) {
+          payload.sessionPowerSuspend = manifestOptionalString(*powerIt, "suspend");
+          payload.sessionPowerReboot = manifestOptionalString(*powerIt, "reboot");
+          payload.sessionPowerShutdown = manifestOptionalString(*powerIt, "shutdown");
+        }
+        if (const auto actionsIt = sessionIt->find("actions"); actionsIt != sessionIt->end() && actionsIt->is_array()) {
+          for (const auto& item : *actionsIt) {
+            if (auto row = parseManifestSessionAction(item)) {
+              payload.sessionActions.push_back(std::move(*row));
+            }
+          }
+        }
+      }
+
+      return payload;
+    } catch (const std::exception& e) {
+      kLog.warn("failed to parse appearance manifest '{}': {}", path.string(), e.what());
+      return std::nullopt;
+    }
+  }
 
   std::filesystem::path syncedDataDirectory() {
     const char* overrideDir = std::getenv(kSyncedDataDirEnv);
@@ -124,24 +253,25 @@ namespace greeter::appearance {
 
   std::filesystem::path packageConfPath() { return syncedDataDirectory() / kGreeterTomlFileName; }
 
+  std::filesystem::path syncConfPath() { return syncedDataDirectory() / kSyncTomlFileName; }
+
   std::filesystem::path manifestPath() { return syncedDataDirectory() / kManifestFileName; }
 
   bool syncedAppearanceInstalled() {
+    const config::GreeterSyncFile sync = config::loadSync(syncConfPath());
+    if (sync.appearance.hasCompletePalette()) {
+      return true;
+    }
     std::error_code ec;
     return std::filesystem::is_regular_file(manifestPath(), ec) && !ec;
   }
 
-  std::filesystem::path stagingManifestPath(const std::filesystem::path& stagingDirectory) {
-    return stagingDirectory / kManifestFileName;
+  std::filesystem::path stagingSyncTomlPath(const std::filesystem::path& stagingDirectory) {
+    return stagingDirectory / kSyncTomlFileName;
   }
 
-  const std::vector<std::string_view>& requiredPaletteKeys() {
-    static const std::vector<std::string_view> keys = {
-        "primary", "on_primary", "secondary", "on_secondary", "tertiary",        "on_tertiary",
-        "error",   "on_error",   "surface",   "on_surface",   "surface_variant", "on_surface_variant",
-        "outline", "shadow",     "hover",     "on_hover",
-    };
-    return keys;
+  std::filesystem::path stagingManifestPath(const std::filesystem::path& stagingDirectory) {
+    return stagingDirectory / kManifestFileName;
   }
 
   std::optional<WallpaperFillMode> parseFillMode(std::string_view value) {
@@ -164,10 +294,20 @@ namespace greeter::appearance {
   }
 
   bool validateStagingManifest(const std::filesystem::path& stagingDirectory, std::string& errorOut) {
-    const auto manifestFile = stagingManifestPath(stagingDirectory);
     std::error_code ec;
+    const auto stagedSync = stagingSyncTomlPath(stagingDirectory);
+    if (std::filesystem::is_regular_file(stagedSync, ec) && !ec) {
+      const config::GreeterSyncFile sync = config::loadSync(stagedSync);
+      if (!sync.appearance.hasCompletePalette()) {
+        errorOut = "staged sync.toml is missing a complete appearance.palette";
+        return false;
+      }
+      return true;
+    }
+
+    const auto manifestFile = stagingManifestPath(stagingDirectory);
     if (!std::filesystem::is_regular_file(manifestFile, ec) || ec) {
-      errorOut = "missing appearance.json in staging directory";
+      errorOut = "missing staged sync.toml (or legacy appearance.json) in staging directory";
       return false;
     }
 
@@ -237,16 +377,20 @@ namespace greeter::appearance {
       return false;
     }
 
-    const auto manifestSource = stagingManifestPath(stagingDirectory);
-    const auto manifestDestination = manifestPath();
-    if (!installRegularFile(manifestSource, manifestDestination, kSyncedFileMode, errorOut)) {
-      return false;
-    }
-
     for (const auto& wallpaperSource : stagingWallpaperFiles(stagingDirectory)) {
       const auto wallpaperDestination = destination / wallpaperSource.filename();
       if (!installRegularFile(wallpaperSource, wallpaperDestination, kSyncedFileMode, errorOut)) {
         return false;
+      }
+    }
+
+    // appearance.json is legacy; palette/wallpaper/session data is merged into sync.toml by
+    // applySyncedGreeterPreferences instead. Drop any stale live copy from an older release.
+    const auto legacyManifest = manifestPath();
+    if (std::filesystem::is_regular_file(legacyManifest, ec) && !ec) {
+      std::filesystem::remove(legacyManifest, ec);
+      if (ec) {
+        kLog.warn("failed to remove legacy '{}': {}", legacyManifest.string(), ec.message());
       }
     }
 
@@ -295,10 +439,87 @@ namespace greeter::appearance {
       return false;
     }
 
-    if (!greeter::applyAppearanceSyncGreeterConf(stagedOutputLayout, stagedOutputTransforms)) {
-      errorOut = "failed to update greeter.toml after appearance sync";
+    const auto stagedSyncPath = stagingSyncTomlPath(stagingDirectory);
+    std::error_code ec;
+    greeter::GreeterSyncAppearanceUpdate appearanceUpdate;
+    if (std::filesystem::is_regular_file(stagedSyncPath, ec) && !ec) {
+      const config::GreeterSyncFile staged = config::loadSync(stagedSyncPath);
+      if (!staged.appearance.hasCompletePalette()) {
+        errorOut = "staged sync.toml is missing a complete appearance.palette";
+        return false;
+      }
+      appearanceUpdate.appearance = staged.appearance;
+      appearanceUpdate.sessionPowerSuspend = staged.sessionPowerSuspend;
+      appearanceUpdate.sessionPowerReboot = staged.sessionPowerReboot;
+      appearanceUpdate.sessionPowerShutdown = staged.sessionPowerShutdown;
+      appearanceUpdate.sessionActions = staged.sessionActions;
+    } else {
+      const auto manifestFile = stagingManifestPath(stagingDirectory);
+      auto manifestPayload = parseManifestForSync(manifestFile);
+      if (!manifestPayload.has_value()) {
+        errorOut = std::string("failed to parse staged '") + manifestFile.string() + "'";
+        return false;
+      }
+      appearanceUpdate.appearance = std::move(manifestPayload->appearance);
+      appearanceUpdate.sessionPowerSuspend = std::move(manifestPayload->sessionPowerSuspend);
+      appearanceUpdate.sessionPowerReboot = std::move(manifestPayload->sessionPowerReboot);
+      appearanceUpdate.sessionPowerShutdown = std::move(manifestPayload->sessionPowerShutdown);
+      appearanceUpdate.sessionActions = std::move(manifestPayload->sessionActions);
+    }
+
+    if (!greeter::applyAppearanceSyncGreeterConf(stagedOutputLayout, stagedOutputTransforms, appearanceUpdate)) {
+      errorOut = "failed to update sync.toml after appearance sync";
       return false;
     }
+    return true;
+  }
+
+  bool ensureSyncedDataOwnedByGreeter(std::string& errorOut) {
+    if (::geteuid() != 0) {
+      return true;
+    }
+
+    const auto destination = syncedDataDirectory();
+    const auto owner = greeter::resolveDataDirOwnership(destination, errorOut);
+    if (!owner.has_value()) {
+      return false;
+    }
+
+    std::error_code ec;
+    if (std::filesystem::exists(destination, ec) && !ec) {
+      if (!setPathOwnership(destination, *owner, errorOut)) {
+        return false;
+      }
+    }
+
+    const auto syncPath = syncConfPath();
+    if (std::filesystem::is_regular_file(syncPath, ec) && !ec) {
+      if (!setPathOwnership(syncPath, *owner, errorOut)) {
+        return false;
+      }
+    }
+
+    if (!std::filesystem::is_directory(destination, ec) || ec) {
+      return true;
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(destination, ec)) {
+      if (ec) {
+        errorOut = std::string("failed to enumerate '") + destination.string() + "': " + ec.message();
+        return false;
+      }
+      if (!entry.is_regular_file(ec) || ec) {
+        continue;
+      }
+      const auto name = entry.path().filename().string();
+      if (!isWallpaperFileName(name)) {
+        continue;
+      }
+      if (!setPathOwnership(entry.path(), *owner, errorOut)) {
+        return false;
+      }
+    }
+
     return true;
   }
 

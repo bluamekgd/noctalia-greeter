@@ -212,6 +212,63 @@ namespace {
     return true;
   }
 
+  constexpr const char* kLegacyStateTomlFileName = "state.toml";
+
+  void migrateLegacyRuntimeKeysToSync() {
+    const auto confPath = greeter::greeterConfPath();
+    const auto syncPath = greeter::greeterSyncPath();
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(syncPath, ec) && !ec) {
+      return;
+    }
+
+    // Prior releases named this file state.toml; adopt it once under the new name.
+    const auto legacyStatePath = syncPath.parent_path() / kLegacyStateTomlFileName;
+    const bool hasLegacyState = std::filesystem::is_regular_file(legacyStatePath, ec) && !ec;
+    greeter::config::GreeterSyncFile sync =
+        hasLegacyState ? greeter::config::loadSync(legacyStatePath) : greeter::config::GreeterSyncFile{};
+
+    greeter::config::GreeterConfigFile conf = greeter::config::loadConfig(confPath);
+    const bool hasRuntime = (conf.sessionLast.has_value() && !conf.sessionLast->empty())
+        || (conf.appearanceScheme.has_value() && !conf.appearanceScheme->empty())
+        || (conf.outputLayout.has_value() && !conf.outputLayout->empty())
+        || (conf.outputTransforms.has_value() && !conf.outputTransforms->empty());
+    if (!hasLegacyState && !hasRuntime) {
+      return;
+    }
+
+    if (conf.sessionLast.has_value() && !conf.sessionLast->empty()) {
+      sync.sessionLast = conf.sessionLast;
+    }
+    if (conf.appearanceScheme.has_value() && !conf.appearanceScheme->empty()) {
+      sync.appearanceScheme = conf.appearanceScheme;
+    }
+    if (conf.outputLayout.has_value() && !conf.outputLayout->empty()) {
+      sync.outputLayout = conf.outputLayout;
+    }
+    if (conf.outputTransforms.has_value() && !conf.outputTransforms->empty()) {
+      sync.outputTransforms = conf.outputTransforms;
+    }
+    if (!greeter::config::writeSync(syncPath, sync)) {
+      kLog.warn("failed to migrate runtime keys to {}", syncPath.string());
+      return;
+    }
+
+    if (hasRuntime) {
+      conf.sessionLast.reset();
+      conf.appearanceScheme.reset();
+      conf.outputLayout.reset();
+      conf.outputTransforms.reset();
+      if (!greeter::config::writeConfig(confPath, conf)) {
+        kLog.warn("migrated sync.toml but failed to strip runtime keys from {}", confPath.string());
+        return;
+      }
+      kLog.info("migrated runtime keys from greeter.toml into {}", syncPath.string());
+    } else {
+      kLog.info("migrated {} to {}", legacyStatePath.string(), syncPath.string());
+    }
+  }
+
 } // namespace
 
 namespace greeter {
@@ -224,6 +281,8 @@ namespace greeter {
   } // namespace
 
   std::filesystem::path greeterConfPath() { return appearance::packageConfPath(); }
+
+  std::filesystem::path greeterSyncPath() { return appearance::syncConfPath(); }
 
   void setCliDefaultSession(std::optional<std::string> session) { g_cliDefaultSession = std::move(session); }
 
@@ -253,43 +312,60 @@ namespace greeter {
   }
 
   std::vector<GreeterOutputPlacement> loadGreeterOutputLayout() {
-    const config::GreeterConfigFile file = config::loadConfig(greeterConfPath());
-    if (!file.outputLayout.has_value() || file.outputLayout->empty()) {
+    migrateLegacyRuntimeKeysToSync();
+    const config::GreeterConfigFile conf = config::loadConfig(greeterConfPath());
+    if (conf.outputLayout.has_value() && !conf.outputLayout->empty()) {
+      return parseOutputLayoutValue(*conf.outputLayout);
+    }
+    const config::GreeterSyncFile sync = config::loadSync(greeterSyncPath());
+    if (!sync.outputLayout.has_value() || sync.outputLayout->empty()) {
       return {};
     }
-    return parseOutputLayoutValue(*file.outputLayout);
+    return parseOutputLayoutValue(*sync.outputLayout);
   }
 
   bool applyAppearanceSyncGreeterConf(
-      const std::optional<std::string>& stagedOutputLayout, const std::optional<std::string>& stagedOutputTransforms
+      const std::optional<std::string>& stagedOutputLayout, const std::optional<std::string>& stagedOutputTransforms,
+      const std::optional<GreeterSyncAppearanceUpdate>& appearanceUpdate
   ) {
-    config::GreeterConfigFile file = config::loadConfig(greeterConfPath());
-    file.appearanceScheme = appearance::kSyncedSchemeDisplayName;
+    migrateLegacyRuntimeKeysToSync();
+    config::GreeterSyncFile sync = config::loadSync(greeterSyncPath());
+    sync.appearanceScheme = appearance::kSyncedSchemeDisplayName;
     if (stagedOutputLayout.has_value()) {
       if (stagedOutputLayout->empty() || parseOutputLayoutValue(*stagedOutputLayout).empty()) {
         kLog.warn("refusing to apply invalid staged output layout");
         return false;
       }
-      file.outputLayout = *stagedOutputLayout;
+      sync.outputLayout = *stagedOutputLayout;
     }
     if (stagedOutputTransforms.has_value()) {
       if (stagedOutputTransforms->empty() || countValidOutputTransformEntries(*stagedOutputTransforms) == 0) {
         kLog.warn("refusing to apply invalid staged output transforms");
         return false;
       }
-      file.outputTransforms = *stagedOutputTransforms;
+      sync.outputTransforms = *stagedOutputTransforms;
     }
-    return config::writeConfig(greeterConfPath(), file);
+    if (appearanceUpdate.has_value()) {
+      sync.appearance = appearanceUpdate->appearance;
+      sync.sessionPowerSuspend = appearanceUpdate->sessionPowerSuspend;
+      sync.sessionPowerReboot = appearanceUpdate->sessionPowerReboot;
+      sync.sessionPowerShutdown = appearanceUpdate->sessionPowerShutdown;
+      sync.sessionActions = appearanceUpdate->sessionActions;
+    }
+    return config::writeSync(greeterSyncPath(), sync);
   }
 
   GreeterPreferences loadGreeterPreferences() {
+    migrateLegacyRuntimeKeysToSync();
     const config::GreeterConfigFile file = config::loadConfig(greeterConfPath());
+    const config::GreeterSyncFile sync = config::loadSync(greeterSyncPath());
 
     GreeterPreferences prefs;
     prefs.defaultSession = file.sessionDefault;
     prefs.defaultUser = file.userDefault;
-    prefs.session = file.sessionLast;
-    prefs.scheme = file.appearanceScheme;
+    prefs.session = sync.sessionLast;
+    // greeter.toml is declarative and wins; sync.toml only carries the last UI pick.
+    prefs.scheme = file.appearanceScheme.has_value() ? file.appearanceScheme : sync.appearanceScheme;
     prefs.output = file.outputName;
     prefs.scale = file.outputScale;
     if (file.appearancePasswordStyle.has_value()) {
@@ -349,6 +425,21 @@ namespace greeter {
       return false;
     }
 
+    migrateLegacyRuntimeKeysToSync();
+    const auto syncPath = greeterSyncPath();
+    if (!std::filesystem::is_regular_file(syncPath, ec) || ec) {
+      if (!config::writeSync(syncPath, {})) {
+        errorOut = "failed to write sync.toml";
+        return false;
+      }
+    }
+    if (!setPathMode(syncPath, kGreeterConfMode, errorOut)) {
+      return false;
+    }
+    if (!setPathOwner(syncPath, greeterAccount, errorOut)) {
+      return false;
+    }
+
     kLog.info(
         "{} greeter.toml at '{}' for user '{}'", confExisted ? "updated" : "created", confPath.string(), greeterAccount
     );
@@ -356,22 +447,23 @@ namespace greeter {
   }
 
   bool saveGreeterPreferences(const GreeterPreferences& prefs) {
-    const auto path = greeterConfPath();
-    config::GreeterConfigFile file = config::loadConfig(path);
+    migrateLegacyRuntimeKeysToSync();
+    const auto path = greeterSyncPath();
+    config::GreeterSyncFile sync = config::loadSync(path);
 
     if (prefs.session.has_value() && !prefs.session->empty()) {
-      file.sessionLast = *prefs.session;
+      sync.sessionLast = *prefs.session;
     } else {
-      file.sessionLast.reset();
+      sync.sessionLast.reset();
     }
 
     if (prefs.scheme.has_value() && !prefs.scheme->empty()) {
-      file.appearanceScheme = *prefs.scheme;
+      sync.appearanceScheme = *prefs.scheme;
     } else {
-      file.appearanceScheme.reset();
+      sync.appearanceScheme.reset();
     }
 
-    if (!config::writeConfig(path, file)) {
+    if (!config::writeSync(path, sync)) {
       if (!std::filesystem::exists(path)) {
         kLog.warn(
             "cannot create {}; greetd user needs write access to {} (run: "
@@ -382,7 +474,7 @@ namespace greeter {
       return false;
     }
 
-    kLog.debug("saved greeter prefs to {}", path.string());
+    kLog.debug("saved greeter preferences to {}", path.string());
     return true;
   }
 

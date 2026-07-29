@@ -27,12 +27,24 @@ namespace {
         || key == "idle";
   }
 
-  [[nodiscard]] bool isKnownSessionKey(std::string_view key) { return key == "default" || key == "last"; }
+  [[nodiscard]] bool isKnownSessionKey(std::string_view key) {
+    // "power"/"actions" are Sync-only (sync.toml); recognized here only so parseConfig
+    // does not warn about them when parsing sync.toml through the shared session-table loop.
+    return key == "default" || key == "last" || key == "power" || key == "actions";
+  }
 
   [[nodiscard]] bool isKnownUserKey(std::string_view key) { return key == "default"; }
 
   [[nodiscard]] bool isKnownAppearanceKey(std::string_view key) {
-    return key == "scheme" || key == "password_style" || key == "hide_logo";
+    return key == "scheme"
+        || key == "password_style"
+        || key == "hide_logo"
+        || key == "theme_mode"
+        || key == "corner_radius_scale"
+        || key == "font_family"
+        || key == "palette"
+        || key == "wallpaper"
+        || key == "wallpapers";
   }
 
   [[nodiscard]] bool isKnownOutputKey(std::string_view key) {
@@ -101,6 +113,20 @@ namespace {
     return std::nullopt;
   }
 
+  [[nodiscard]] greeter::config::GreeterTomlWallpaper parseWallpaperTable(const toml::table& table) {
+    greeter::config::GreeterTomlWallpaper wallpaper;
+    if (const auto* pathNode = table.get("path")) {
+      wallpaper.path = stringValue(*pathNode);
+    }
+    if (const auto* fillModeNode = table.get("fill_mode")) {
+      wallpaper.fillMode = stringValue(*fillModeNode);
+    }
+    if (const auto* fillColorNode = table.get("fill_color")) {
+      wallpaper.fillColor = stringValue(*fillColorNode);
+    }
+    return wallpaper;
+  }
+
   void warnUnknownTopLevelKey(const std::filesystem::path& path, std::string_view key) {
     kLog.warn("{}: unrecognized top-level key '{}' (ignored)", path.string(), key);
   }
@@ -138,9 +164,10 @@ namespace {
           }
           if (entryView == "default") {
             config.sessionDefault = stringValue(entryNode);
-          } else {
+          } else if (entryView == "last") {
             config.sessionLast = stringValue(entryNode);
           }
+          // power/actions: Sync-only, parsed directly from the root table by parseSync.
         } else if (keyView == "user") {
           if (!isKnownUserKey(entryView)) {
             warnUnknownSectionKey(path, keyView, entryView);
@@ -159,6 +186,44 @@ namespace {
           } else if (entryView == "hide_logo") {
             if (const auto value = entryNode.value<bool>()) {
               config.appearanceHideLogo = *value;
+            }
+          } else if (entryView == "theme_mode") {
+            config.appearance.themeMode = stringValue(entryNode);
+          } else if (entryView == "corner_radius_scale") {
+            if (const auto scale = positiveFloatValue(entryNode)) {
+              config.appearance.cornerRadiusScale = *scale;
+            } else {
+              kLog.warn("{}: invalid appearance.corner_radius_scale value", path.string());
+            }
+          } else if (entryView == "font_family") {
+            config.appearance.fontFamily = stringValue(entryNode);
+          } else if (entryView == "palette") {
+            if (const auto* paletteTable = entryNode.as_table()) {
+              for (const auto& [paletteKey, paletteNode] : *paletteTable) {
+                if (const auto value = stringValue(paletteNode)) {
+                  config.appearance.palette[std::string(paletteKey.str())] = *value;
+                }
+              }
+            } else {
+              kLog.warn("{}: appearance.palette must be a table", path.string());
+            }
+          } else if (entryView == "wallpaper") {
+            if (const auto* wallpaperTable = entryNode.as_table()) {
+              config.appearance.wallpaper = parseWallpaperTable(*wallpaperTable);
+            } else {
+              kLog.warn("{}: appearance.wallpaper must be a table", path.string());
+            }
+          } else if (entryView == "wallpapers") {
+            if (const auto* wallpapersTable = entryNode.as_table()) {
+              for (const auto& [connectorKey, connectorNode] : *wallpapersTable) {
+                if (const auto* connectorTable = connectorNode.as_table()) {
+                  config.appearance.wallpapers[std::string(connectorKey.str())] = parseWallpaperTable(*connectorTable);
+                } else {
+                  kLog.warn("{}: appearance.wallpapers.{} must be a table", path.string(), connectorKey.str());
+                }
+              }
+            } else {
+              kLog.warn("{}: appearance.wallpapers must be a table", path.string());
             }
           }
         } else if (keyView == "output") {
@@ -256,6 +321,74 @@ namespace {
     }
   }
 
+  [[nodiscard]] toml::table buildWallpaperTomlTable(const greeter::config::GreeterTomlWallpaper& wallpaper) {
+    toml::table table;
+    insertString(table, "path", wallpaper.path, [](toml::table& t, std::string_view key, const std::string& value) {
+      t.insert_or_assign(std::string(key), value);
+    });
+    insertString(
+        table, "fill_mode", wallpaper.fillMode, [](toml::table& t, std::string_view key, const std::string& value) {
+          t.insert_or_assign(std::string(key), value);
+        }
+    );
+    insertString(
+        table, "fill_color", wallpaper.fillColor, [](toml::table& t, std::string_view key, const std::string& value) {
+          t.insert_or_assign(std::string(key), value);
+        }
+    );
+    return table;
+  }
+
+  // Shared by greeter.toml and sync.toml: theme_mode/corner_radius_scale/font_family/palette/wallpaper(s).
+  // Callers add their own scheme/password_style/hide_logo keys on top.
+  [[nodiscard]] toml::table buildAppearanceTomlTable(const greeter::config::GreeterTomlAppearance& appearance) {
+    toml::table table;
+    insertString(
+        table, "theme_mode", appearance.themeMode, [](toml::table& t, std::string_view key, const std::string& value) {
+          t.insert_or_assign(std::string(key), value);
+        }
+    );
+    if (appearance.cornerRadiusScale.has_value()) {
+      table.insert_or_assign("corner_radius_scale", static_cast<double>(*appearance.cornerRadiusScale));
+    }
+    insertString(
+        table, "font_family", appearance.fontFamily,
+        [](toml::table& t, std::string_view key, const std::string& value) {
+          t.insert_or_assign(std::string(key), value);
+        }
+    );
+    if (!appearance.palette.empty()) {
+      toml::table palette;
+      for (const auto& [key, value] : appearance.palette) {
+        if (!value.empty()) {
+          palette.insert_or_assign(key, value);
+        }
+      }
+      if (!palette.empty()) {
+        table.insert("palette", std::move(palette));
+      }
+    }
+    if (appearance.wallpaper.has_value()) {
+      toml::table wallpaper = buildWallpaperTomlTable(*appearance.wallpaper);
+      if (!wallpaper.empty()) {
+        table.insert("wallpaper", std::move(wallpaper));
+      }
+    }
+    if (!appearance.wallpapers.empty()) {
+      toml::table wallpapers;
+      for (const auto& [connector, wallpaper] : appearance.wallpapers) {
+        toml::table wallpaperTable = buildWallpaperTomlTable(wallpaper);
+        if (!wallpaperTable.empty()) {
+          wallpapers.insert(connector, std::move(wallpaperTable));
+        }
+      }
+      if (!wallpapers.empty()) {
+        table.insert("wallpapers", std::move(wallpapers));
+      }
+    }
+    return table;
+  }
+
   [[nodiscard]] toml::table buildTomlTable(const greeter::config::GreeterConfigFile& config) {
     toml::table root;
 
@@ -263,11 +396,6 @@ namespace {
     insertString(
         session, "default", config.sessionDefault,
         [](toml::table& table, std::string_view key, const std::string& value) {
-          table.insert_or_assign(std::string(key), value);
-        }
-    );
-    insertString(
-        session, "last", config.sessionLast, [](toml::table& table, std::string_view key, const std::string& value) {
           table.insert_or_assign(std::string(key), value);
         }
     );
@@ -285,7 +413,7 @@ namespace {
       root.insert("user", std::move(user));
     }
 
-    toml::table appearance;
+    toml::table appearance = buildAppearanceTomlTable(config.appearance);
     insertString(
         appearance, "scheme", config.appearanceScheme,
         [](toml::table& table, std::string_view key, const std::string& value) {
@@ -394,6 +522,171 @@ namespace {
     return root;
   }
 
+  [[nodiscard]] toml::table buildSyncTomlTable(const greeter::config::GreeterSyncFile& sync) {
+    toml::table root;
+
+    toml::table session;
+    insertString(
+        session, "last", sync.sessionLast, [](toml::table& table, std::string_view key, const std::string& value) {
+          table.insert_or_assign(std::string(key), value);
+        }
+    );
+    toml::table power;
+    insertString(
+        power, "suspend", sync.sessionPowerSuspend,
+        [](toml::table& table, std::string_view key, const std::string& value) {
+          table.insert_or_assign(std::string(key), value);
+        }
+    );
+    insertString(
+        power, "reboot", sync.sessionPowerReboot,
+        [](toml::table& table, std::string_view key, const std::string& value) {
+          table.insert_or_assign(std::string(key), value);
+        }
+    );
+    insertString(
+        power, "shutdown", sync.sessionPowerShutdown,
+        [](toml::table& table, std::string_view key, const std::string& value) {
+          table.insert_or_assign(std::string(key), value);
+        }
+    );
+    if (!power.empty()) {
+      session.insert("power", std::move(power));
+    }
+    if (!sync.sessionActions.empty()) {
+      toml::array actions;
+      for (const auto& action : sync.sessionActions) {
+        if (action.action.empty()) {
+          continue;
+        }
+        toml::table row;
+        row.insert_or_assign("action", action.action);
+        insertString(
+            row, "command", action.command, [](toml::table& table, std::string_view key, const std::string& value) {
+              table.insert_or_assign(std::string(key), value);
+            }
+        );
+        insertString(
+            row, "label", action.label, [](toml::table& table, std::string_view key, const std::string& value) {
+              table.insert_or_assign(std::string(key), value);
+            }
+        );
+        insertString(
+            row, "glyph", action.glyph, [](toml::table& table, std::string_view key, const std::string& value) {
+              table.insert_or_assign(std::string(key), value);
+            }
+        );
+        actions.push_back(std::move(row));
+      }
+      if (!actions.empty()) {
+        session.insert("actions", std::move(actions));
+      }
+    }
+    if (!session.empty()) {
+      root.insert("session", std::move(session));
+    }
+
+    toml::table appearance = buildAppearanceTomlTable(sync.appearance);
+    insertString(
+        appearance, "scheme", sync.appearanceScheme,
+        [](toml::table& table, std::string_view key, const std::string& value) {
+          table.insert_or_assign(std::string(key), value);
+        }
+    );
+    if (!appearance.empty()) {
+      root.insert("appearance", std::move(appearance));
+    }
+
+    toml::table output;
+    insertString(
+        output, "layout", sync.outputLayout, [](toml::table& table, std::string_view key, const std::string& value) {
+          table.insert_or_assign(std::string(key), value);
+        }
+    );
+    insertString(
+        output, "transforms", sync.outputTransforms,
+        [](toml::table& table, std::string_view key, const std::string& value) {
+          table.insert_or_assign(std::string(key), value);
+        }
+    );
+    if (!output.empty()) {
+      root.insert("output", std::move(output));
+    }
+
+    return root;
+  }
+
+  [[nodiscard]] std::vector<greeter::config::GreeterSyncFile::SyncSessionAction>
+  parseSyncSessionActions(const toml::array& array, const std::filesystem::path& path) {
+    std::vector<greeter::config::GreeterSyncFile::SyncSessionAction> actions;
+    for (const auto& node : array) {
+      const auto* table = node.as_table();
+      if (table == nullptr) {
+        kLog.warn("{}: session.actions entries must be tables", path.string());
+        continue;
+      }
+      const auto* actionNode = table->get("action");
+      const auto action = actionNode != nullptr ? stringValue(*actionNode) : std::nullopt;
+      if (!action.has_value()) {
+        kLog.warn("{}: session.actions entry is missing 'action'", path.string());
+        continue;
+      }
+      greeter::config::GreeterSyncFile::SyncSessionAction row;
+      row.action = *action;
+      if (const auto* commandNode = table->get("command")) {
+        row.command = stringValue(*commandNode);
+      }
+      if (const auto* labelNode = table->get("label")) {
+        row.label = stringValue(*labelNode);
+      }
+      if (const auto* glyphNode = table->get("glyph")) {
+        row.glyph = stringValue(*glyphNode);
+      }
+      actions.push_back(std::move(row));
+    }
+    return actions;
+  }
+
+  [[nodiscard]] greeter::config::GreeterSyncFile parseSync(const toml::table& root, const std::filesystem::path& path) {
+    // Reuse config parser, then keep only sync keys (including the Sync-owned appearance table).
+    const greeter::config::GreeterConfigFile full = parseConfig(root, path);
+    greeter::config::GreeterSyncFile sync;
+    sync.sessionLast = full.sessionLast;
+    sync.appearanceScheme = full.appearanceScheme;
+    sync.outputLayout = full.outputLayout;
+    sync.outputTransforms = full.outputTransforms;
+    sync.appearance = full.appearance;
+
+    if (const auto* sessionNode = root.get("session")) {
+      if (const auto* sessionTable = sessionNode->as_table()) {
+        if (const auto* powerNode = sessionTable->get("power")) {
+          if (const auto* powerTable = powerNode->as_table()) {
+            if (const auto* n = powerTable->get("suspend")) {
+              sync.sessionPowerSuspend = stringValue(*n);
+            }
+            if (const auto* n = powerTable->get("reboot")) {
+              sync.sessionPowerReboot = stringValue(*n);
+            }
+            if (const auto* n = powerTable->get("shutdown")) {
+              sync.sessionPowerShutdown = stringValue(*n);
+            }
+          } else {
+            kLog.warn("{}: session.power must be a table", path.string());
+          }
+        }
+        if (const auto* actionsNode = sessionTable->get("actions")) {
+          if (const auto* actionsArray = actionsNode->as_array()) {
+            sync.sessionActions = parseSyncSessionActions(*actionsArray, path);
+          } else {
+            kLog.warn("{}: session.actions must be an array of tables", path.string());
+          }
+        }
+      }
+    }
+
+    return sync;
+  }
+
   [[nodiscard]] std::string formatToml(const toml::table& table) {
     std::ostringstream out;
     out << toml::toml_formatter{
@@ -417,6 +710,16 @@ namespace {
 
 namespace greeter::config {
 
+  bool GreeterTomlAppearance::hasCompletePalette() const {
+    for (const auto key : greeter::appearance::requiredPaletteKeys()) {
+      const auto it = palette.find(std::string(key));
+      if (it == palette.end() || it->second.empty()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   GreeterConfigFile loadConfig(const std::filesystem::path& path) {
     std::error_code ec;
     if (!std::filesystem::is_regular_file(path, ec) || ec) {
@@ -436,11 +739,21 @@ namespace greeter::config {
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
 
-    const toml::table table = buildTomlTable(config);
+    // Declarative file only — the last-used session lives in sync.toml.
+    GreeterConfigFile declarative = config;
+    declarative.sessionLast.reset();
+
+    const toml::table table = buildTomlTable(declarative);
 
     std::ostringstream out;
-    out << "# noctalia-greeter greeter.toml\n";
-    out << "# [session] default/last, [user] default, [appearance] scheme/password_style/hide_logo\n";
+    out << "# noctalia-greeter greeter.toml (declarative; Nix-safe; UI and Sync never write this)\n";
+    out << "# Last-used session lives in sync.toml; UI/Sync also fall back to sync.toml for scheme\n";
+    out << "# and output layout/transforms when not set here. Session power actions/menu entries are\n";
+    out << "# Sync-only (sync.toml [session.power]/[[session.actions]]) and are not settable here.\n";
+    out << "# [session] default, [user] default\n";
+    out << "# [appearance] scheme, password_style, hide_logo, theme_mode, corner_radius_scale, font_family\n";
+    out << "# [appearance.palette] full color role table, [appearance.wallpaper] path/fill_mode/fill_color\n";
+    out << "# [appearance.wallpapers.<connector>] per-output wallpaper overrides\n";
     out << "# [output] name/layout/scale/width/height/transforms, [idle] timeout, [cursor] theme/size/path\n";
     out << "# [keyboard] layout/variant/options/numlock\n";
     out << "# [auth] allow_empty_password (bool, default false; enables fingerprint/smartcard PAM auth)\n";
@@ -457,7 +770,118 @@ namespace greeter::config {
     return file.good();
   }
 
+  GreeterSyncFile loadSync(const std::filesystem::path& path) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec) || ec) {
+      return {};
+    }
+
+    try {
+      const toml::table table = toml::parse_file(path.string());
+      return parseSync(table, path);
+    } catch (const toml::parse_error& e) {
+      kLog.warn("failed to parse {}: {}", path.string(), e.description());
+      return {};
+    }
+  }
+
+  bool writeSync(const std::filesystem::path& path, const GreeterSyncFile& sync) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+
+    const toml::table table = buildSyncTomlTable(sync);
+
+    std::ostringstream out;
+    out << "# noctalia-greeter sync.toml (UI + Sync; not managed by Nix)\n";
+    out << "# [session] last, [session.power] suspend/reboot/shutdown, [[session.actions]] "
+           "action/command/label/glyph\n";
+    out << "# [appearance] scheme, theme_mode, corner_radius_scale, font_family\n";
+    out << "# [appearance.palette] full color role table, [appearance.wallpaper]/[appearance.wallpapers.<connector>]\n";
+    out << "# [output] layout/transforms\n";
+    out << '\n';
+    out << formatToml(table);
+
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) {
+      kLog.warn("failed to open '{}' for write", path.string());
+      return false;
+    }
+    const std::string content = out.str();
+    file.write(content.data(), static_cast<std::streamsize>(content.size()));
+    return file.good();
+  }
+
 } // namespace greeter::config
+
+namespace {
+
+  [[nodiscard]] std::optional<std::string>
+  preferString(const std::optional<std::string>& preferred, const std::optional<std::string>& fallback) {
+    if (preferred.has_value() && !preferred->empty()) {
+      return preferred;
+    }
+    if (fallback.has_value() && !fallback->empty()) {
+      return fallback;
+    }
+    return std::nullopt;
+  }
+
+  constexpr const char* kLegacyStateTomlFileName = "state.toml";
+
+  void migrateLegacyRuntimeKeysToSync(const std::filesystem::path& confPath, const std::filesystem::path& syncPath) {
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(syncPath, ec) && !ec) {
+      return;
+    }
+
+    // Prior releases named this file state.toml; adopt it once under the new name.
+    const auto legacyStatePath = syncPath.parent_path() / kLegacyStateTomlFileName;
+    const bool hasLegacyState = std::filesystem::is_regular_file(legacyStatePath, ec) && !ec;
+    greeter::config::GreeterSyncFile sync =
+        hasLegacyState ? greeter::config::loadSync(legacyStatePath) : greeter::config::GreeterSyncFile{};
+
+    greeter::config::GreeterConfigFile conf = greeter::config::loadConfig(confPath);
+    const bool hasRuntime = (conf.sessionLast.has_value() && !conf.sessionLast->empty())
+        || (conf.appearanceScheme.has_value() && !conf.appearanceScheme->empty())
+        || (conf.outputLayout.has_value() && !conf.outputLayout->empty())
+        || (conf.outputTransforms.has_value() && !conf.outputTransforms->empty());
+    if (!hasLegacyState && !hasRuntime) {
+      return;
+    }
+
+    if (conf.sessionLast.has_value() && !conf.sessionLast->empty()) {
+      sync.sessionLast = conf.sessionLast;
+    }
+    if (conf.appearanceScheme.has_value() && !conf.appearanceScheme->empty()) {
+      sync.appearanceScheme = conf.appearanceScheme;
+    }
+    if (conf.outputLayout.has_value() && !conf.outputLayout->empty()) {
+      sync.outputLayout = conf.outputLayout;
+    }
+    if (conf.outputTransforms.has_value() && !conf.outputTransforms->empty()) {
+      sync.outputTransforms = conf.outputTransforms;
+    }
+    if (!greeter::config::writeSync(syncPath, sync)) {
+      kLog.warn("failed to migrate runtime keys to {}", syncPath.string());
+      return;
+    }
+
+    if (hasRuntime) {
+      conf.sessionLast.reset();
+      conf.appearanceScheme.reset();
+      conf.outputLayout.reset();
+      conf.outputTransforms.reset();
+      if (!greeter::config::writeConfig(confPath, conf)) {
+        kLog.warn("migrated sync.toml but failed to strip runtime keys from {}", confPath.string());
+        return;
+      }
+      kLog.info("migrated runtime keys from greeter.toml into {}", syncPath.string());
+    } else {
+      kLog.info("migrated {} to {}", legacyStatePath.string(), syncPath.string());
+    }
+  }
+
+} // namespace
 
 extern "C" void greeter_compositor_config_load(const char* state_dir, struct greeter_compositor_config* out) {
   if (out == nullptr) {
@@ -471,8 +895,12 @@ extern "C" void greeter_compositor_config_load(const char* state_dir, struct gre
     dir = greeter::appearance::kDefaultSyncedDataDir;
   }
 
-  const auto path = std::filesystem::path(dir) / greeter::appearance::kGreeterTomlFileName;
-  const greeter::config::GreeterConfigFile config = greeter::config::loadConfig(path);
+  const auto confPath = std::filesystem::path(dir) / greeter::appearance::kGreeterTomlFileName;
+  const auto syncPath = std::filesystem::path(dir) / greeter::appearance::kSyncTomlFileName;
+  migrateLegacyRuntimeKeysToSync(confPath, syncPath);
+
+  const greeter::config::GreeterConfigFile config = greeter::config::loadConfig(confPath);
+  const greeter::config::GreeterSyncFile sync = greeter::config::loadSync(syncPath);
 
   copyString(out->preferred_output, sizeof(out->preferred_output), config.outputName);
   copyString(out->cursor_theme, sizeof(out->cursor_theme), config.cursorTheme);
@@ -483,8 +911,12 @@ extern "C" void greeter_compositor_config_load(const char* state_dir, struct gre
   if (config.keyboardNumlock.has_value()) {
     out->keyboard_numlock = *config.keyboardNumlock ? 1 : -1;
   }
-  copyString(out->output_layout, sizeof(out->output_layout), config.outputLayout);
-  copyString(out->output_transforms, sizeof(out->output_transforms), config.outputTransforms);
+  // greeter.toml wins; otherwise Sync/UI sync.toml.
+  copyString(out->output_layout, sizeof(out->output_layout), preferString(config.outputLayout, sync.outputLayout));
+  copyString(
+      out->output_transforms, sizeof(out->output_transforms),
+      preferString(config.outputTransforms, sync.outputTransforms)
+  );
 
   if (config.outputScale.has_value() && *config.outputScale >= 1.0f) {
     out->manual_scale = *config.outputScale;

@@ -26,7 +26,8 @@ namespace {
         << "Installs appearance into "
         << greeter::appearance::syncedDataDirectory().string()
         << " (root, world-readable).\n"
-        << "--setup-system creates greeter.toml and chowns it to the "
+        << "Sync merges into sync.toml and chowns synced files to the greetd session user.\n"
+        << "--setup-system creates greeter.toml / sync.toml and chowns them to the "
            "greetd user.\n\n"
         << "Environment:\n"
         << "  "
@@ -79,6 +80,11 @@ int main(int argc, char* argv[]) {
   }
 
   if (!greeter::appearance::applySyncedGreeterPreferences(stagingDirectory, error)) {
+    kLog.error("{}", error);
+    return 1;
+  }
+
+  if (!greeter::appearance::ensureSyncedDataOwnedByGreeter(error)) {
     kLog.error("{}", error);
     return 1;
   }

@@ -42,14 +42,25 @@ in
         ];
       default = { };
       description = ''
-        Settings for noctalia-greeter written to greeter.toml.
-        Can be written as:
-          - A Nix attrset (converted to TOML via nixpkgs' tomlFormat)
-          - A raw TOML string
-          - A path to a `.toml` file
+        Full declarative greeter.toml (overwritten on every activation via tmpfiles C+).
+        Configure everything here: session/user defaults, appearance (scheme, palette,
+        wallpaper, font, ...), output, idle, cursor, keyboard, auth.
+        Sync/UI mutable data lives in sync.toml and is not managed by this option.
+        Accepts a Nix attrset, raw TOML string, or path to a `.toml` file.
+        See examples/greeter.toml in the noctalia-greeter repository.
       '';
       example = lib.literalExpression ''
         {
+          session.default = "niri";
+          appearance = {
+            scheme = "Synced";
+            password_style = "default";
+            palette = {
+              primary = "#fff59b";
+              on_primary = "#0e0e43";
+              # … remaining required palette keys …
+            };
+          };
           cursor = {
             theme = "Adwaita";
             size = 24;
@@ -80,7 +91,7 @@ in
         };
       }
       // lib.optionalAttrs (cfg.settings != { }) {
-        "/var/lib/noctalia-greeter/greeter.toml".C = {
+        "/var/lib/noctalia-greeter/greeter.toml"."C+" = {
           argument = "${generateToml "greeter.toml" cfg.settings}";
           inherit user group;
           mode = "0644";

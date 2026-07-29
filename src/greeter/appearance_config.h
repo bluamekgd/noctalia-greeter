@@ -44,5 +44,10 @@ struct GreeterSyncedAppearance {
   }
 };
 
+// Legacy Sync appearance.json path; used only for the one-shot migration into sync.toml.
 [[nodiscard]] std::filesystem::path greeterAppearanceConfigPath();
+
+// Synced scheme source, in order: greeter.toml embedded appearance (if its palette is
+// complete), else sync.toml [appearance] (Sync-owned, if its palette is complete), else the
+// legacy live appearance.json — migrated into sync.toml once when found.
 [[nodiscard]] std::optional<GreeterSyncedAppearance> loadGreeterSyncedAppearance();

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "greeter/greeter_config_store.h"
+
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -33,21 +35,33 @@ namespace greeter {
   };
 
   [[nodiscard]] std::filesystem::path greeterConfPath();
+  [[nodiscard]] std::filesystem::path greeterSyncPath();
 
   [[nodiscard]] GreeterPreferences loadGreeterPreferences();
+  // Persists [session].last and [appearance].scheme to sync.toml only.
   [[nodiscard]] bool saveGreeterPreferences(const GreeterPreferences& prefs);
 
-  // [output].layout in greeter.toml: "NAME:X,Y; ..." (logical pixels, compositor + client).
+  // Declarative greeter.toml layout if set, else sync.toml (Sync).
   [[nodiscard]] std::vector<GreeterOutputPlacement> loadGreeterOutputLayout();
 
-  // Sets [appearance].scheme to Synced; updates [output].layout / [output].transforms only when
-  // the corresponding staged value is set.
+  // Sync-owned appearance + session power/menu payload to merge into sync.toml, replacing any
+  // previously synced values wholesale (a staged sync.toml / legacy appearance.json is a full snapshot).
+  struct GreeterSyncAppearanceUpdate {
+    config::GreeterTomlAppearance appearance;
+    std::optional<std::string> sessionPowerSuspend;
+    std::optional<std::string> sessionPowerReboot;
+    std::optional<std::string> sessionPowerShutdown;
+    std::vector<config::GreeterSyncFile::SyncSessionAction> sessionActions;
+  };
+
+  // Sets sync.toml scheme to Synced; updates layout/transforms only when staged; replaces the
+  // Sync-owned appearance + session power/menu data when `appearanceUpdate` is set.
   [[nodiscard]] bool applyAppearanceSyncGreeterConf(
-      const std::optional<std::string>& stagedOutputLayout, const std::optional<std::string>& stagedOutputTransforms
+      const std::optional<std::string>& stagedOutputLayout, const std::optional<std::string>& stagedOutputTransforms,
+      const std::optional<GreeterSyncAppearanceUpdate>& appearanceUpdate
   );
 
-  // greetd/CLI default (--session / --cmd); overrides greeter.toml
-  // default_session.
+  // greetd/CLI default (--session / --cmd); overrides greeter.toml default.
   void setCliDefaultSession(std::optional<std::string> session);
 
   // greetd/CLI default (--user); overrides greeter.toml default_user.
@@ -59,7 +73,7 @@ namespace greeter {
   // CLI default → default_user.
   [[nodiscard]] std::optional<std::string> resolveInitialUserName(const GreeterPreferences& prefs);
 
-  // Root only: synced data dir, greeter.toml, chown conf to greeterUser.
+  // Root only: state dir, greeter.toml + sync.toml, chown to greeterUser.
   [[nodiscard]] bool installGreeterSystemLayout(std::string_view greeterUser, std::string& errorOut);
 
 } // namespace greeter

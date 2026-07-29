@@ -1857,7 +1857,7 @@ void GreeterSurface::savePreferences() const {
   }
 
   if (!greeter::saveGreeterPreferences(prefs)) {
-    kLog.warn("failed to save greeter.toml (check permissions on {})", greeter::greeterConfPath().string());
+    kLog.warn("failed to save sync.toml (check permissions on {})", greeter::greeterSyncPath().string());
   }
 }
 

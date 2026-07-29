@@ -20,4 +20,6 @@ struct GreeterSyncedSession {
   std::vector<GreeterSyncedSessionAction> actions;
 };
 
+// Prefers sync.toml [session.power]/[[session.actions]]; falls back to (and migrates into
+// sync.toml) the legacy Sync-owned appearance.json "session" object when sync.toml has neither.
 [[nodiscard]] std::optional<GreeterSyncedSession> loadGreeterSyncedSession();
