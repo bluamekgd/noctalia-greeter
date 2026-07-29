@@ -255,8 +255,13 @@ executable('noctalia-greeter-apply-appearance',
   install: true,
 )
 
-install_data(
-  'data/org.noctalia.greeter.apply-appearance.policy',
+configure_file(
+  input: 'data/org.noctalia.greeter.apply-appearance.policy.in',
+  output: 'org.noctalia.greeter.apply-appearance.policy',
+  configuration: {
+    'bindir': get_option('prefix') / get_option('bindir'),
+  },
+  install: true,
   install_dir: get_option('datadir') / 'polkit-1' / 'actions',
 )
 
