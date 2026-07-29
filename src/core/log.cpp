@@ -255,7 +255,7 @@ static void writeLogLine(std::string_view tag, std::string_view level, std::stri
   const std::string line = oss.str();
 
   if (g_consoleLogging) {
-    FILE* stream = (level == "ERR" || level == "WRN") ? stderr : stdout;
+    FILE* stream = (level == "INF") ? stdout : stderr;
     std::fputs(line.c_str(), stream);
     std::fflush(stream);
   }

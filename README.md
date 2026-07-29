@@ -323,7 +323,7 @@ just setup-log-dir
 
 On systemd (or opentmpfiles), installs also ship `/usr/lib/tmpfiles.d/noctalia-greeter.conf` so the state dir can be recreated with `systemd-tmpfiles --create`. That drop-in hardcodes the `greeter` user; use the setup script when your greetd user differs.
 
-Logging defaults to **syslog** under greetd (journald on systemd, metalog/syslog-ng/etc. on OpenRC). The session wrapper parks stdout/stderr so wlroots/libseat chatter does not flash the VT. Override with `NOCTALIA_GREETER_LOG=stderr` for console debugging, or `NOCTALIA_GREETER_LOG=/path` for a log file:
+Logging defaults to **syslog** under greetd (journald on systemd, metalog/syslog-ng/etc. on OpenRC). The session wrapper parks stdout/stderr so wlroots/libseat chatter does not flash the VT. Override with `NOCTALIA_GREETER_LOG=stderr` for console debugging (info → stdout, debug/warn/error → stderr), or `NOCTALIA_GREETER_LOG=/path` for a log file:
 
 ```toml
 command = "env NOCTALIA_GREETER_LOG=stderr WLR_LOG=info /usr/bin/noctalia-greeter-session"
