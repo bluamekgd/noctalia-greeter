@@ -45,7 +45,7 @@ int main(int argc, char* argv[]) {
   if (argc == 2 && std::string_view(argv[1]) == "--setup-system") {
     const auto greeterUser = greeter::resolveGreeterAccountName();
     if (!greeterUser.has_value()) {
-      kLog.error("could not resolve greeter account from greetd config");
+      kLog.error("could not resolve greeter account");
       return 1;
     }
     std::string error;
@@ -60,7 +60,7 @@ int main(int argc, char* argv[]) {
   if (argc == 2 && std::string_view(argv[1]) == "--print-greeter-user") {
     const auto greeterUser = greeter::resolveGreeterAccountName();
     if (!greeterUser.has_value()) {
-      kLog.error("could not resolve greeter account from greetd config");
+      kLog.error("could not resolve greeter account");
       return 1;
     }
     std::cout << *greeterUser << '\n';

@@ -15,7 +15,7 @@ namespace greeter {
     gid_t gid = 0;
   };
 
-  // Greetd session user for install/setup (from greetd config or GREETER_USER).
+  // Greetd session user for install/setup (GREETER_USER, state dir owner, or greetd config).
   [[nodiscard]] std::optional<std::string> resolveGreeterAccountName();
 
   // Owner for synced state files: existing dataDir owner when not root, else greetd session user.

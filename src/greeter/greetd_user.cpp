@@ -1,6 +1,7 @@
 #include "greeter/greetd_user.h"
 
 #include "core/log.h"
+#include "greeter/appearance_sync.h"
 
 #include <cctype>
 #include <cerrno>
@@ -141,6 +142,24 @@ namespace {
 
   [[nodiscard]] bool accountExists(std::string_view name) { return ::getpwnam(std::string(name).c_str()) != nullptr; }
 
+  [[nodiscard]] std::optional<std::string> accountNameFromDataDirOwner(const std::filesystem::path& dataDir) {
+    std::error_code ec;
+    if (!std::filesystem::exists(dataDir, ec) || ec) {
+      return std::nullopt;
+    }
+
+    struct stat st{};
+    if (::stat(dataDir.c_str(), &st) != 0 || st.st_uid == 0) {
+      return std::nullopt;
+    }
+
+    struct passwd* pw = ::getpwuid(st.st_uid);
+    if (pw == nullptr || pw->pw_name == nullptr || pw->pw_name[0] == '\0') {
+      return std::nullopt;
+    }
+    return std::string(pw->pw_name);
+  }
+
 } // namespace
 
 namespace greeter {
@@ -149,6 +168,11 @@ namespace greeter {
     if (const char* env = std::getenv(kGreeterUserEnv); env != nullptr && env[0] != '\0') {
       kLog.debug("greeter account from {}: {}", kGreeterUserEnv, env);
       return std::string(env);
+    }
+
+    if (const auto fromOwner = accountNameFromDataDirOwner(appearance::syncedDataDirectory())) {
+      kLog.debug("greeter account from state dir owner: {}", *fromOwner);
+      return fromOwner;
     }
 
     for (const auto& path : greetdConfigPaths()) {

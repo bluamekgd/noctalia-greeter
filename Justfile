@@ -49,6 +49,10 @@ setup-system:
 print-greetd-config:
   ./scripts/print_greetd_config.sh
 
+# Print the resolved greetd session user.
+print-greeter-user: build
+  ./build/noctalia-greeter-apply-appearance --print-greeter-user
+
 # Create greeter state dir for greetd (portable; any init)
 setup-log-dir:
   #!/usr/bin/env bash
