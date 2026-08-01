@@ -15,15 +15,16 @@ namespace greeter::appearance {
   // State dir (/var/lib/noctalia-greeter by default):
   //   greeter.toml     — full declarative config (Nix-safe C+ overwrite)
   //   sync.toml        — Sync + UI mutable: palette/wallpaper/theme/font, session power/menu,
-  //                      last session/scheme, synced layout/transforms
+  //                      last session/scheme, synced layout/transforms/scales
   //   appearance.json  — legacy live file only (migrated into sync.toml on first load).
-  // Staging: shell writes sync.toml (+ wallpapers, optional layout/transforms text files).
+  // Staging: shell writes sync.toml (+ wallpapers, optional layout/transforms/scales text files).
   // Legacy shells may still stage appearance.json; apply accepts either.
   // Precedence: greeter.toml wins over sync.toml when both set.
   inline constexpr const char* kDefaultSyncedDataDir = "/var/lib/noctalia-greeter";
   inline constexpr const char* kManifestFileName = "appearance.json";
   inline constexpr const char* kOutputLayoutFileName = "output_layout";
   inline constexpr const char* kOutputTransformsFileName = "output_transforms";
+  inline constexpr const char* kOutputScalesFileName = "output_scales";
   inline constexpr const char* kGreeterTomlFileName = "greeter.toml";
   inline constexpr const char* kSyncTomlFileName = "sync.toml";
   inline constexpr const char* kWallpaperBaseName = "wallpaper";
@@ -57,7 +58,7 @@ namespace greeter::appearance {
   // Installs wallpaper images into syncedDataDirectory() (no live appearance.json).
   [[nodiscard]] bool installFromStaging(const std::filesystem::path& stagingDirectory, std::string& errorOut);
 
-  // Merges staged sync.toml (or legacy appearance.json) + optional layout/transforms into live sync.toml.
+  // Merges staged sync.toml (or legacy appearance.json) + optional layout/transforms/scales into live sync.toml.
   [[nodiscard]] bool
   applySyncedGreeterPreferences(const std::filesystem::path& stagingDirectory, std::string& errorOut);
 

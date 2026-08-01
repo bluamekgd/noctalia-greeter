@@ -54,10 +54,11 @@ namespace greeter {
     std::vector<config::GreeterSyncFile::SyncSessionAction> sessionActions;
   };
 
-  // Sets sync.toml scheme to Synced; updates layout/transforms only when staged; replaces the
+  // Sets sync.toml scheme to Synced; updates layout/transforms/scales only when staged; replaces the
   // Sync-owned appearance + session power/menu data when `appearanceUpdate` is set.
   [[nodiscard]] bool applyAppearanceSyncGreeterConf(
       const std::optional<std::string>& stagedOutputLayout, const std::optional<std::string>& stagedOutputTransforms,
+      const std::optional<std::string>& stagedOutputScales,
       const std::optional<GreeterSyncAppearanceUpdate>& appearanceUpdate
   );
 

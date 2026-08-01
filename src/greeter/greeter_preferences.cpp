@@ -158,6 +158,59 @@ namespace {
     return !name.empty() && isValidOutputTransformToken(value);
   }
 
+  [[nodiscard]] bool parseOutputScaleEntry(std::string_view token) {
+    const std::string trimmed = trim(token);
+    if (trimmed.empty()) {
+      return false;
+    }
+
+    const std::size_t colon = trimmed.rfind(':');
+    if (colon == std::string_view::npos || colon == 0) {
+      return false;
+    }
+
+    const std::string name = trim(trimmed.substr(0, colon));
+    const std::string value = trim(trimmed.substr(colon + 1));
+    if (name.empty() || value.empty()) {
+      return false;
+    }
+    char* end = nullptr;
+    const float scale = std::strtof(value.c_str(), &end);
+    return end != value.c_str() && end != nullptr && *end == '\0' && scale >= 1.0f;
+  }
+
+  [[nodiscard]] std::size_t countValidOutputScaleEntries(std::string_view raw) {
+    std::size_t count = 0;
+    std::string normalized;
+    normalized.reserve(raw.size());
+    for (const char ch : raw) {
+      normalized.push_back(ch == ';' ? ' ' : ch);
+    }
+
+    std::size_t begin = 0;
+    while (begin < normalized.size()) {
+      while (begin < normalized.size() && std::isspace(static_cast<unsigned char>(normalized[begin])) != 0) {
+        ++begin;
+      }
+      if (begin >= normalized.size()) {
+        break;
+      }
+
+      std::size_t end = begin;
+      while (end < normalized.size() && std::isspace(static_cast<unsigned char>(normalized[end])) == 0) {
+        ++end;
+      }
+
+      if (parseOutputScaleEntry(normalized.substr(begin, end - begin))) {
+        ++count;
+      } else {
+        kLog.warn("ignoring invalid output scale entry '{}'", normalized.substr(begin, end - begin));
+      }
+      begin = end;
+    }
+    return count;
+  }
+
   [[nodiscard]] std::size_t countValidOutputTransformEntries(std::string_view raw) {
     std::size_t count = 0;
     std::string normalized;
@@ -225,7 +278,8 @@ namespace {
     const bool hasRuntime = (conf.sessionLast.has_value() && !conf.sessionLast->empty())
         || (conf.appearanceScheme.has_value() && !conf.appearanceScheme->empty())
         || (conf.outputLayout.has_value() && !conf.outputLayout->empty())
-        || (conf.outputTransforms.has_value() && !conf.outputTransforms->empty());
+        || (conf.outputTransforms.has_value() && !conf.outputTransforms->empty())
+        || (conf.outputScales.has_value() && !conf.outputScales->empty());
     if (!hasLegacyState && !hasRuntime) {
       return;
     }
@@ -242,6 +296,9 @@ namespace {
     if (conf.outputTransforms.has_value() && !conf.outputTransforms->empty()) {
       sync.outputTransforms = conf.outputTransforms;
     }
+    if (conf.outputScales.has_value() && !conf.outputScales->empty()) {
+      sync.outputScales = conf.outputScales;
+    }
     if (!greeter::config::writeSync(syncPath, sync)) {
       kLog.warn("failed to migrate runtime keys to {}", syncPath.string());
       return;
@@ -252,6 +309,7 @@ namespace {
       conf.appearanceScheme.reset();
       conf.outputLayout.reset();
       conf.outputTransforms.reset();
+      conf.outputScales.reset();
       if (!greeter::config::writeConfig(confPath, conf)) {
         kLog.warn("migrated sync.toml but failed to strip runtime keys from {}", confPath.string());
         return;
@@ -319,6 +377,7 @@ namespace greeter {
 
   bool applyAppearanceSyncGreeterConf(
       const std::optional<std::string>& stagedOutputLayout, const std::optional<std::string>& stagedOutputTransforms,
+      const std::optional<std::string>& stagedOutputScales,
       const std::optional<GreeterSyncAppearanceUpdate>& appearanceUpdate
   ) {
     if (::geteuid() == 0) {
@@ -345,6 +404,13 @@ namespace greeter {
         return false;
       }
       sync.outputTransforms = *stagedOutputTransforms;
+    }
+    if (stagedOutputScales.has_value()) {
+      if (stagedOutputScales->empty() || countValidOutputScaleEntries(*stagedOutputScales) == 0) {
+        kLog.warn("refusing to apply invalid staged output scales");
+        return false;
+      }
+      sync.outputScales = *stagedOutputScales;
     }
     if (appearanceUpdate.has_value()) {
       sync.appearance = appearanceUpdate->appearance;

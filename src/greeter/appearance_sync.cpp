@@ -426,10 +426,14 @@ namespace greeter::appearance {
 
     std::optional<std::string> stagedOutputLayout;
     std::optional<std::string> stagedOutputTransforms;
+    std::optional<std::string> stagedOutputScales;
     if (!readStagedText(kOutputLayoutFileName, stagedOutputLayout)) {
       return false;
     }
     if (!readStagedText(kOutputTransformsFileName, stagedOutputTransforms)) {
+      return false;
+    }
+    if (!readStagedText(kOutputScalesFileName, stagedOutputScales)) {
       return false;
     }
 
@@ -461,7 +465,9 @@ namespace greeter::appearance {
       appearanceUpdate.sessionActions = std::move(manifestPayload->sessionActions);
     }
 
-    if (!greeter::applyAppearanceSyncGreeterConf(stagedOutputLayout, stagedOutputTransforms, appearanceUpdate)) {
+    if (!greeter::applyAppearanceSyncGreeterConf(
+            stagedOutputLayout, stagedOutputTransforms, stagedOutputScales, appearanceUpdate
+        )) {
       errorOut = "failed to update sync.toml after appearance sync";
       return false;
     }

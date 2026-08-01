@@ -51,6 +51,7 @@ namespace {
     return key == "name"
         || key == "layout"
         || key == "scale"
+        || key == "scales"
         || key == "width"
         || key == "height"
         || key == "transforms";
@@ -255,6 +256,8 @@ namespace {
             }
           } else if (entryView == "transforms") {
             config.outputTransforms = stringValue(entryNode);
+          } else if (entryView == "scales") {
+            config.outputScales = stringValue(entryNode);
           }
         } else if (keyView == "idle") {
           if (!isKnownIdleKey(entryView)) {
@@ -459,6 +462,11 @@ namespace {
           table.insert_or_assign(std::string(key), value);
         }
     );
+    insertString(
+        output, "scales", config.outputScales, [](toml::table& table, std::string_view key, const std::string& value) {
+          table.insert_or_assign(std::string(key), value);
+        }
+    );
     if (!output.empty()) {
       root.insert("output", std::move(output));
     }
@@ -609,6 +617,11 @@ namespace {
           table.insert_or_assign(std::string(key), value);
         }
     );
+    insertString(
+        output, "scales", sync.outputScales, [](toml::table& table, std::string_view key, const std::string& value) {
+          table.insert_or_assign(std::string(key), value);
+        }
+    );
     if (!output.empty()) {
       root.insert("output", std::move(output));
     }
@@ -655,6 +668,7 @@ namespace {
     sync.appearanceScheme = full.appearanceScheme;
     sync.outputLayout = full.outputLayout;
     sync.outputTransforms = full.outputTransforms;
+    sync.outputScales = full.outputScales;
     sync.appearance = full.appearance;
 
     if (const auto* sessionNode = root.get("session")) {
@@ -754,7 +768,7 @@ namespace greeter::config {
     out << "# [appearance] scheme, password_style, hide_logo, theme_mode, corner_radius_scale, font_family\n";
     out << "# [appearance.palette] full color role table, [appearance.wallpaper] path/fill_mode/fill_color\n";
     out << "# [appearance.wallpapers.<connector>] per-output wallpaper overrides\n";
-    out << "# [output] name/layout/scale/width/height/transforms, [idle] timeout, [cursor] theme/size/path\n";
+    out << "# [output] name/layout/scale/scales/width/height/transforms, [idle] timeout, [cursor] theme/size/path\n";
     out << "# [keyboard] layout/variant/options/numlock\n";
     out << "# [auth] allow_empty_password (bool, default false; enables fingerprint/smartcard PAM auth)\n";
     out << '\n';
@@ -797,7 +811,7 @@ namespace greeter::config {
            "action/command/label/glyph\n";
     out << "# [appearance] scheme, theme_mode, corner_radius_scale, font_family\n";
     out << "# [appearance.palette] full color role table, [appearance.wallpaper]/[appearance.wallpapers.<connector>]\n";
-    out << "# [output] layout/transforms\n";
+    out << "# [output] layout/transforms/scales\n";
     out << '\n';
     out << formatToml(table);
 
@@ -844,7 +858,8 @@ namespace {
     const bool hasRuntime = (conf.sessionLast.has_value() && !conf.sessionLast->empty())
         || (conf.appearanceScheme.has_value() && !conf.appearanceScheme->empty())
         || (conf.outputLayout.has_value() && !conf.outputLayout->empty())
-        || (conf.outputTransforms.has_value() && !conf.outputTransforms->empty());
+        || (conf.outputTransforms.has_value() && !conf.outputTransforms->empty())
+        || (conf.outputScales.has_value() && !conf.outputScales->empty());
     if (!hasLegacyState && !hasRuntime) {
       return;
     }
@@ -861,6 +876,9 @@ namespace {
     if (conf.outputTransforms.has_value() && !conf.outputTransforms->empty()) {
       sync.outputTransforms = conf.outputTransforms;
     }
+    if (conf.outputScales.has_value() && !conf.outputScales->empty()) {
+      sync.outputScales = conf.outputScales;
+    }
     if (!greeter::config::writeSync(syncPath, sync)) {
       kLog.warn("failed to migrate runtime keys to {}", syncPath.string());
       return;
@@ -871,6 +889,7 @@ namespace {
       conf.appearanceScheme.reset();
       conf.outputLayout.reset();
       conf.outputTransforms.reset();
+      conf.outputScales.reset();
       if (!greeter::config::writeConfig(confPath, conf)) {
         kLog.warn("migrated sync.toml but failed to strip runtime keys from {}", confPath.string());
         return;
@@ -917,6 +936,7 @@ extern "C" void greeter_compositor_config_load(const char* state_dir, struct gre
       out->output_transforms, sizeof(out->output_transforms),
       preferString(config.outputTransforms, sync.outputTransforms)
   );
+  copyString(out->output_scales, sizeof(out->output_scales), preferString(config.outputScales, sync.outputScales));
 
   if (config.outputScale.has_value() && *config.outputScale >= 1.0f) {
     out->manual_scale = *config.outputScale;

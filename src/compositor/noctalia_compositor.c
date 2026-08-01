@@ -105,6 +105,11 @@ struct greeter_output_transform {
   enum wl_output_transform transform;
 };
 
+struct greeter_output_scale {
+  char name[128];
+  float scale;
+};
+
 struct greeter_server {
   struct wl_display* display;
   struct wlr_backend* backend;
@@ -149,6 +154,8 @@ struct greeter_server {
   int manual_mode_height;
   struct greeter_output_transform output_transforms[16];
   size_t output_transform_count;
+  struct greeter_output_scale output_scales[16];
+  size_t output_scale_count;
   int idle_timeout_sec;
   struct timespec last_activity;
   int idle_timerfd;
@@ -192,6 +199,17 @@ static float clamp_scale(float value) {
   return value;
 }
 
+// Configured/synced scales may exceed the auto-scale UI cap; keep them faithful to the session.
+static float clamp_configured_scale(float value) {
+  if (value < 1.0f) {
+    return 1.0f;
+  }
+  if (value > 10.0f) {
+    return 10.0f;
+  }
+  return value;
+}
+
 static float dpi_from_axis(int pixels, int phys_mm) {
   if (pixels <= 0 || phys_mm <= 0) {
     return 0.0f;
@@ -228,9 +246,24 @@ static float fallback_scale_for_resolution(int mode_width, int mode_height) {
   return 1.0f;
 }
 
-static float output_ui_scale(const struct wlr_output* output, float manual, int mode_width, int mode_height) {
-  if (manual >= 1.0f) {
-    return clamp_scale(manual);
+static float output_ui_scale(
+    const struct greeter_server* server, const struct wlr_output* output, int mode_width, int mode_height
+) {
+  // greeter.toml [output].scale (all outputs) wins over per-output scales from sync/config.
+  if (server->manual_scale >= 1.0f) {
+    return clamp_configured_scale(server->manual_scale);
+  }
+  if (output != nullptr && output->name != nullptr) {
+    for (size_t i = 0; i < server->output_scale_count; ++i) {
+      if (strcmp(server->output_scales[i].name, output->name) == 0) {
+        return clamp_configured_scale(server->output_scales[i].scale);
+      }
+    }
+  }
+  // Absolute layout coords are session-logical. Without matching scales, auto DPI scale opens
+  // cursor gaps — stay at 1.0 until Sync provides [output].scales.
+  if (server->output_placement_count > 0) {
+    return 1.0f;
   }
 
   const float dpi = effective_dpi(output, mode_width, mode_height);
@@ -407,12 +440,63 @@ static enum wl_output_transform transform_for_output(const struct greeter_server
   return WL_OUTPUT_TRANSFORM_NORMAL;
 }
 
+static bool parse_output_scale_entry(const char* token, struct greeter_output_scale* out) {
+  char buf[256];
+  snprintf(buf, sizeof(buf), "%s", token);
+  char* colon = strrchr(buf, ':');
+  if (colon == NULL || colon == buf) {
+    return false;
+  }
+  *colon = '\0';
+  char* name = trim(buf);
+  char* scale_raw = trim(colon + 1);
+  if (name[0] == '\0' || scale_raw[0] == '\0') {
+    return false;
+  }
+  char* end = NULL;
+  const float scale = strtof(scale_raw, &end);
+  if (end == scale_raw || *end != '\0' || scale < 1.0f) {
+    return false;
+  }
+  snprintf(out->name, sizeof(out->name), "%s", name);
+  out->scale = scale;
+  return true;
+}
+
+static void parse_output_scales_value(struct greeter_server* server, char* value) {
+  server->output_scale_count = 0;
+  for (char* p = value; *p != '\0'; ++p) {
+    if (*p == ';') {
+      *p = ' ';
+    }
+  }
+
+  char* saveptr = NULL;
+  for (char* token = strtok_r(value, " \t", &saveptr); token != NULL; token = strtok_r(NULL, " \t", &saveptr)) {
+    if (server->output_scale_count >= sizeof(server->output_scales) / sizeof(server->output_scales[0])) {
+      wlr_log(
+          WLR_ERROR, "output_scales: too many entries (max %zu)",
+          sizeof(server->output_scales) / sizeof(server->output_scales[0])
+      );
+      break;
+    }
+    struct greeter_output_scale entry;
+    if (!parse_output_scale_entry(token, &entry)) {
+      wlr_log(WLR_ERROR, "output_scales: invalid entry '%s' (use NAME:1.25)", token);
+      continue;
+    }
+    server->output_scales[server->output_scale_count++] = entry;
+    wlr_log(WLR_INFO, "output scale: %s -> %.3f", entry.name, entry.scale);
+  }
+}
+
 static void read_greeter_config(struct greeter_server* server) {
   server->preferred_output[0] = '\0';
   server->manual_scale = 0.0f;
   server->manual_mode_width = 0;
   server->manual_mode_height = 0;
   server->output_transform_count = 0;
+  server->output_scale_count = 0;
   server->idle_timeout_sec = 0;
   server->cursor_theme[0] = '\0';
   server->cursor_size = 0;
@@ -491,6 +575,11 @@ static void read_greeter_config(struct greeter_server* server) {
     char transforms[2048];
     snprintf(transforms, sizeof(transforms), "%s", config.output_transforms);
     parse_output_transforms_value(server, transforms);
+  }
+  if (config.output_scales[0] != '\0') {
+    char scales[2048];
+    snprintf(scales, sizeof(scales), "%s", config.output_scales);
+    parse_output_scales_value(server, scales);
   }
 }
 
@@ -971,7 +1060,7 @@ static bool commit_output_enabled(struct greeter_output* output) {
   wlr_output_state_set_transform(&state, transform);
   const int mode_width = mode != NULL ? mode->width : 0;
   const int mode_height = mode != NULL ? mode->height : 0;
-  const float scale = output_ui_scale(output->wlr_output, server->manual_scale, mode_width, mode_height);
+  const float scale = output_ui_scale(server, output->wlr_output, mode_width, mode_height);
   wlr_output_state_set_scale(&state, scale);
   bool ok = wlr_output_commit_state(output->wlr_output, &state);
   wlr_output_state_finish(&state);
