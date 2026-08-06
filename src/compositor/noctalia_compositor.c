@@ -246,14 +246,13 @@ static float fallback_scale_for_resolution(int mode_width, int mode_height) {
   return 1.0f;
 }
 
-static float output_ui_scale(
-    const struct greeter_server* server, const struct wlr_output* output, int mode_width, int mode_height
-) {
+static float
+output_ui_scale(const struct greeter_server* server, const struct wlr_output* output, int mode_width, int mode_height) {
   // greeter.toml [output].scale (all outputs) wins over per-output scales from sync/config.
   if (server->manual_scale >= 1.0f) {
     return clamp_configured_scale(server->manual_scale);
   }
-  if (output != nullptr && output->name != nullptr) {
+  if (output != NULL && output->name != NULL) {
     for (size_t i = 0; i < server->output_scale_count; ++i) {
       if (strcmp(server->output_scales[i].name, output->name) == 0) {
         return clamp_configured_scale(server->output_scales[i].scale);
