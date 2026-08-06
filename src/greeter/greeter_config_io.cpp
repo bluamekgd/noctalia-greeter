@@ -191,8 +191,13 @@ namespace {
           } else if (entryView == "theme_mode") {
             config.appearance.themeMode = stringValue(entryNode);
           } else if (entryView == "corner_radius_scale") {
-            if (const auto scale = positiveFloatValue(entryNode)) {
-              config.appearance.cornerRadiusScale = *scale;
+            if (const auto value = entryNode.value<double>()) {
+              const float parsed = static_cast<float>(*value);
+              if (std::isfinite(parsed) && parsed >= 0.0f) {
+                config.appearance.cornerRadiusScale = parsed;
+              } else {
+                kLog.warn("{}: invalid appearance.corner_radius_scale value", path.string());
+              }
             } else {
               kLog.warn("{}: invalid appearance.corner_radius_scale value", path.string());
             }
