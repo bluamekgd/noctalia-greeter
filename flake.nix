@@ -2,7 +2,7 @@
   description = "Noctalia Greeter - A minimal login greeter for greetd that matches the look and feel of Noctalia Shell";
 
   inputs = {
-    nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
+    nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.zst";
   };
 
   outputs = {
