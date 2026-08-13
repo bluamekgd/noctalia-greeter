@@ -8,6 +8,13 @@
 
 namespace greeter::config {
 
+  struct ConfigDiagnostic {
+    std::filesystem::path path;
+    std::size_t line = 0;
+    std::size_t column = 0;
+    std::string message;
+  };
+
   struct GreeterTomlWallpaper {
     std::optional<std::string> path;
     std::optional<std::string> fillMode;
@@ -97,5 +104,10 @@ namespace greeter::config {
 
   [[nodiscard]] GreeterSyncFile loadSync(const std::filesystem::path& path);
   [[nodiscard]] bool writeSync(const std::filesystem::path& path, const GreeterSyncFile& sync);
+
+  // Parse failures are retained for the greeter UI, which can show a useful
+  // on-screen diagnostic instead of silently falling back to defaults.
+  void clearConfigDiagnostics();
+  [[nodiscard]] const std::vector<ConfigDiagnostic>& configDiagnostics();
 
 } // namespace greeter::config

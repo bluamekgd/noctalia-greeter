@@ -54,13 +54,19 @@ namespace {
 
   std::optional<GreetdResponse> parseResponse(const json& data) {
     if (auto err = parseError(data)) {
-      return GreetdResponse{GreetdResponseType::Error, {}, *err};
+      GreetdResponse response;
+      response.type = GreetdResponseType::Error;
+      response.error = std::move(*err);
+      return response;
     }
     if (auto msg = parseAuthMessage(data)) {
-      return GreetdResponse{GreetdResponseType::AuthMessage, *msg, {}};
+      GreetdResponse response;
+      response.type = GreetdResponseType::AuthMessage;
+      response.authMessage = std::move(*msg);
+      return response;
     }
     if (parseSuccess(data)) {
-      return GreetdResponse{GreetdResponseType::Success, {}, {}};
+      return GreetdResponse{};
     }
     return std::nullopt;
   }

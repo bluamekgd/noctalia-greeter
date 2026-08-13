@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <ranges>
 #include <sstream>
 #include <string_view>
 #include <toml++/toml.hpp>
@@ -15,6 +16,27 @@
 namespace {
 
   constexpr Logger kLog("greeter-config");
+  std::vector<greeter::config::ConfigDiagnostic> g_diagnostics;
+
+  void recordParseError(const std::filesystem::path& path, const toml::parse_error& error) {
+    const auto source = error.source();
+    const auto existing = std::ranges::find_if(g_diagnostics, [&path](const auto& diagnostic) {
+      return diagnostic.path == path;
+    });
+    if (existing != g_diagnostics.end()) {
+      return;
+    }
+    g_diagnostics.push_back({
+        .path = path,
+        .line = source.begin.line,
+        .column = source.begin.column,
+        .message = std::string(error.description()),
+    });
+    kLog.error(
+        "invalid TOML configuration in {}:{}:{}: {}", path.string(), source.begin.line, source.begin.column,
+        error.description()
+    );
+  }
 
   [[nodiscard]] bool isKnownTopLevelKey(std::string_view key) {
     return key == "session"
@@ -749,7 +771,7 @@ namespace greeter::config {
       const toml::table table = toml::parse_file(path.string());
       return parseConfig(table, path);
     } catch (const toml::parse_error& e) {
-      kLog.warn("failed to parse {}: {}", path.string(), e.description());
+      recordParseError(path, e);
       return {};
     }
   }
@@ -799,7 +821,7 @@ namespace greeter::config {
       const toml::table table = toml::parse_file(path.string());
       return parseSync(table, path);
     } catch (const toml::parse_error& e) {
-      kLog.warn("failed to parse {}: {}", path.string(), e.description());
+      recordParseError(path, e);
       return {};
     }
   }
@@ -829,6 +851,10 @@ namespace greeter::config {
     file.write(content.data(), static_cast<std::streamsize>(content.size()));
     return file.good();
   }
+
+  void clearConfigDiagnostics() { g_diagnostics.clear(); }
+
+  const std::vector<ConfigDiagnostic>& configDiagnostics() { return g_diagnostics; }
 
 } // namespace greeter::config
 

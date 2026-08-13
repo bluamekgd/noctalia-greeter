@@ -2,6 +2,7 @@
 
 #include "core/log.h"
 #include "greeter/appearance_config.h"
+#include "greeter/greeter_config_store.h"
 #include "greeter/greeter_preferences.h"
 #include "greeter/greeter_surface.h"
 #include "greeter/greeter_window.h"
@@ -64,6 +65,8 @@ Greeter::~Greeter() = default;
 bool Greeter::initialize(WaylandClient& client) {
   m_client = &client;
   m_initializing = true;
+
+  greeter::config::clearConfigDiagnostics();
 
   const greeter::GreeterPreferences prefs = greeter::loadGreeterPreferences();
 

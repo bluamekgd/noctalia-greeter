@@ -6,6 +6,7 @@
 #include "core/log.h"
 #include "core/resource_paths.h"
 #include "greeter/appearance_config.h"
+#include "greeter/greeter_config_store.h"
 #include "greeter/appearance_sync.h"
 #include "greeter/greeter_preferences.h"
 #include "greeter/greeter_sessions.h"
@@ -502,6 +503,32 @@ void GreeterSurface::initialize(RenderContext* context) {
   m_statusLabel->setZIndex(6);
   m_root.addChild(std::move(status));
 
+  auto configErrorBanner = std::make_unique<RectNode>();
+  configErrorBanner->setHitTestVisible(false);
+  configErrorBanner->setVisible(false);
+  m_configErrorBanner = configErrorBanner.get();
+  m_configErrorBanner->setZIndex(9);
+  m_root.addChild(std::move(configErrorBanner));
+
+  auto configErrorHeading = std::make_unique<Label>();
+  configErrorHeading->setText("Configuration errors");
+  configErrorHeading->setFontSize(Style::fontSizeCaption());
+  configErrorHeading->setBold(true);
+  configErrorHeading->setColor(colorForRole(ColorRole::Error));
+  configErrorHeading->setVisible(false);
+  m_configErrorHeading = configErrorHeading.get();
+  m_configErrorHeading->setZIndex(10);
+  m_root.addChild(std::move(configErrorHeading));
+
+  auto configError = std::make_unique<Label>();
+  configError->setFontSize(Style::fontSizeCaption());
+  configError->setColor(colorForRole(ColorRole::OnSurface));
+  configError->setMaxLines(4);
+  configError->setVisible(false);
+  m_configErrorLabel = configError.get();
+  m_configErrorLabel->setZIndex(10);
+  m_root.addChild(std::move(configError));
+
   m_canRebootToFirmware = power::canRebootToFirmwareSetup();
 
   const auto makePowerButton =
@@ -572,6 +599,26 @@ void GreeterSurface::initialize(RenderContext* context) {
   applyScheme(m_selectedScheme);
   refreshSelectionLabels();
   applyInitialUserSelection();
+
+  if (const auto& diagnostics = greeter::config::configDiagnostics(); !diagnostics.empty()) {
+    const auto& diagnostic = diagnostics.front();
+    std::ostringstream message;
+    message << diagnostic.path.filename().string();
+    if (diagnostic.line > 0) {
+      message << ':' << diagnostic.line;
+      if (diagnostic.column > 0) {
+        message << ':' << diagnostic.column;
+      }
+    }
+    message << ": " << diagnostic.message;
+    if (diagnostics.size() > 1) {
+      message << " (+" << diagnostics.size() - 1 << " more)";
+    }
+    m_configErrorLabel->setText(message.str());
+    m_configErrorLabel->setVisible(true);
+    m_configErrorHeading->setVisible(true);
+    m_configErrorBanner->setVisible(true);
+  }
 
   if (!m_hideLogo) {
     const auto logoPath = paths::assetPath("noctalia.svg");
@@ -1090,6 +1137,40 @@ void GreeterSurface::layoutScene(std::uint32_t width, std::uint32_t height) {
   if (m_statusLabel != nullptr) {
     m_statusLabel->setColor(
         m_statusIsError ? colorForRole(ColorRole::Error) : colorForRole(ColorRole::OnSurfaceVariant)
+    );
+  }
+  if (m_configErrorBanner != nullptr && m_configErrorBanner->visible()) {
+    constexpr float kBannerPadding = 14.0f;
+    constexpr float kBannerMaxWidth = 960.0f;
+    const float bannerWidth = std::max(200.0f, std::min(sw - 80.0f, Style::scaled(kBannerMaxWidth)));
+    const float bannerContentWidth = bannerWidth - Style::scaled(kBannerPadding * 2.0f);
+    m_configErrorHeading->setColor(colorForRole(ColorRole::Error));
+    m_configErrorHeading->setMaxWidth(bannerContentWidth);
+    m_configErrorHeading->measure(*renderer);
+    m_configErrorLabel->setColor(colorForRole(ColorRole::OnSurface));
+    m_configErrorLabel->setMaxWidth(bannerContentWidth);
+    m_configErrorLabel->measure(*renderer);
+
+    const float padding = Style::scaled(kBannerPadding);
+    const float gap = Style::spaceSm();
+    const float bannerHeight = padding * 2.0f + m_configErrorHeading->height() + gap + m_configErrorLabel->height();
+    const float bannerX = std::round(ox + (sw - bannerWidth) * 0.5f);
+    const float bannerY = oy + Style::spaceLg();
+    m_configErrorBanner->setPosition(bannerX, bannerY);
+    m_configErrorBanner->setSize(bannerWidth, bannerHeight);
+    m_configErrorBanner->setStyle(
+        RoundedRectStyle{
+            .fill = colorForRole(ColorRole::SurfaceVariant, 0.97f),
+            .border = colorForRole(ColorRole::Error, 0.75f),
+            .fillMode = FillMode::Solid,
+            .radius = Style::scaledRadiusXl(),
+            .softness = 1.0f,
+            .borderWidth = Style::borderWidth(),
+        }
+    );
+    m_configErrorHeading->setPosition(bannerX + padding, bannerY + padding);
+    m_configErrorLabel->setPosition(
+        bannerX + padding, bannerY + padding + m_configErrorHeading->height() + gap
     );
   }
 

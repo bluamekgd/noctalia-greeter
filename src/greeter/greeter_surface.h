@@ -197,6 +197,9 @@ private:
   Button* m_loginButton = nullptr;
   Button* m_backButton = nullptr;
   Label* m_statusLabel = nullptr;
+  RectNode* m_configErrorBanner = nullptr;
+  Label* m_configErrorHeading = nullptr;
+  Label* m_configErrorLabel = nullptr;
   Button* m_shutdownButton = nullptr;
   Button* m_rebootButton = nullptr;
   Button* m_firmwareButton = nullptr;
