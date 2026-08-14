@@ -30,19 +30,21 @@ namespace {
       .name = &WaylandSeat::handleSeatName,
   };
 
-  const wl_pointer_listener kPointerListener = {
-      .enter = &WaylandSeat::handlePointerEnter,
-      .leave = &WaylandSeat::handlePointerLeave,
-      .motion = &WaylandSeat::handlePointerMotion,
-      .button = &WaylandSeat::handlePointerButton,
-      .axis = &WaylandSeat::handlePointerAxis,
-      .frame = &WaylandSeat::handlePointerFrame,
-      .axis_source = &WaylandSeat::handlePointerAxisSource,
-      .axis_stop = [](void*, wl_pointer*, std::uint32_t, std::uint32_t) {},
-      .axis_discrete = &WaylandSeat::handlePointerAxisDiscrete,
-      .axis_value120 = &WaylandSeat::handlePointerAxisValue120,
-      .axis_relative_direction = [](void*, wl_pointer*, std::uint32_t, std::uint32_t) {},
-  };
+  const wl_pointer_listener kPointerListener = [] {
+    wl_pointer_listener listener{};
+    listener.enter = &WaylandSeat::handlePointerEnter;
+    listener.leave = &WaylandSeat::handlePointerLeave;
+    listener.motion = &WaylandSeat::handlePointerMotion;
+    listener.button = &WaylandSeat::handlePointerButton;
+    listener.axis = &WaylandSeat::handlePointerAxis;
+    listener.frame = &WaylandSeat::handlePointerFrame;
+    listener.axis_source = &WaylandSeat::handlePointerAxisSource;
+    listener.axis_stop = [](void*, wl_pointer*, std::uint32_t, std::uint32_t) {};
+    listener.axis_discrete = &WaylandSeat::handlePointerAxisDiscrete;
+    listener.axis_value120 = &WaylandSeat::handlePointerAxisValue120;
+    listener.axis_relative_direction = [](void*, wl_pointer*, std::uint32_t, std::uint32_t) {};
+    return listener;
+  }();
 
   const wl_touch_listener kTouchListener = {
       .down = &WaylandSeat::handleTouchDown,
