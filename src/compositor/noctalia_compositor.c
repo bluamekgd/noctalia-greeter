@@ -6,11 +6,13 @@
 #include <libinput.h>
 #include <limits.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <sys/timerfd.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -47,6 +49,66 @@
 #ifndef NOCTALIA_GREETER_INSTALLED_BINDIR
 #define NOCTALIA_GREETER_INSTALLED_BINDIR "/usr/local/bin"
 #endif
+
+static bool compositor_syslog_enabled = false;
+
+static int syslog_priority_for_wlr_importance(enum wlr_log_importance importance) {
+  switch (importance) {
+  case WLR_ERROR:
+    return LOG_ERR;
+  case WLR_DEBUG:
+    return LOG_DEBUG;
+  case WLR_INFO:
+  default:
+    return LOG_INFO;
+  }
+}
+
+static void compositor_vsyslog(int priority, const char* format, va_list args) {
+  char message[2048];
+  va_list syslog_args;
+  va_copy(syslog_args, args);
+  vsnprintf(message, sizeof(message), format, syslog_args);
+  va_end(syslog_args);
+  syslog(priority, "%s", message);
+}
+
+static void compositor_log_stderr(int priority, const char* format, ...) {
+  va_list args;
+  va_start(args, format);
+
+  va_list stderr_args;
+  va_copy(stderr_args, args);
+  if (compositor_syslog_enabled) {
+    compositor_vsyslog(priority, format, args);
+  }
+  va_end(args);
+
+  vfprintf(stderr, format, stderr_args);
+  va_end(stderr_args);
+  fflush(stderr);
+}
+
+static void compositor_wlr_log(enum wlr_log_importance importance, const char* format, va_list args) {
+  va_list stderr_args;
+  va_copy(stderr_args, args);
+  if (compositor_syslog_enabled) {
+    compositor_vsyslog(syslog_priority_for_wlr_importance(importance), format, args);
+  }
+
+  fputs("[wlr] ", stderr);
+  vfprintf(stderr, format, stderr_args);
+  fputc('\n', stderr);
+  fflush(stderr);
+  va_end(stderr_args);
+}
+
+static void compositor_init_logging(void) {
+  compositor_syslog_enabled = getenv("GREETD_SOCK") != NULL || getenv("XDG_VTNR") != NULL;
+  if (compositor_syslog_enabled) {
+    openlog("noctalia-greeter-compositor", LOG_PID | LOG_NDELAY, LOG_DAEMON);
+  }
+}
 
 struct greeter_server;
 
@@ -1926,7 +1988,7 @@ static bool start_child(struct greeter_server* server, char** argv, bool free_ar
   }
   if (server->child_pid == 0) {
     execvp(argv[0], argv);
-    fprintf(stderr, "exec %s failed: %s\n", argv[0], strerror(errno));
+    compositor_log_stderr(LOG_ERR, "exec %s failed: %s\n", argv[0], strerror(errno));
     _exit(127);
   }
   if (free_argv) {
@@ -1976,7 +2038,8 @@ static void cleanup_server_listeners(struct greeter_server* server) {
 }
 
 int main(int argc, char** argv) {
-  wlr_log_init(WLR_INFO, NULL);
+  compositor_init_logging();
+  wlr_log_init(WLR_INFO, compositor_wlr_log);
 
   struct greeter_server server = {0};
   server.idle_timerfd = -1;
@@ -1988,25 +2051,25 @@ int main(int argc, char** argv) {
 
   server.display = wl_display_create();
   if (server.display == NULL) {
-    fprintf(stderr, "failed to create Wayland display\n");
+    compositor_log_stderr(LOG_ERR, "failed to create Wayland display\n");
     return 1;
   }
 
   server.backend = wlr_backend_autocreate(wl_display_get_event_loop(server.display), &server.session);
   if (server.backend == NULL) {
-    fprintf(stderr, "failed to create wlroots backend\n");
+    compositor_log_stderr(LOG_ERR, "failed to create wlroots backend\n");
     wl_display_destroy(server.display);
     return 1;
   }
   server.renderer = wlr_renderer_autocreate(server.backend);
   if (server.renderer == NULL || !wlr_renderer_init_wl_display(server.renderer, server.display)) {
-    fprintf(stderr, "failed to create wlroots renderer\n");
+    compositor_log_stderr(LOG_ERR, "failed to create wlroots renderer\n");
     wl_display_destroy(server.display);
     return 1;
   }
   server.allocator = wlr_allocator_autocreate(server.backend, server.renderer);
   if (server.allocator == NULL) {
-    fprintf(stderr, "failed to create wlroots allocator\n");
+    compositor_log_stderr(LOG_ERR, "failed to create wlroots allocator\n");
     wl_display_destroy(server.display);
     return 1;
   }
@@ -2088,7 +2151,7 @@ int main(int argc, char** argv) {
 
   const char* socket = wl_display_add_socket_auto(server.display);
   if (socket == NULL) {
-    fprintf(stderr, "failed to create Wayland socket\n");
+    compositor_log_stderr(LOG_ERR, "failed to create Wayland socket\n");
     cleanup_server_listeners(&server);
     wl_display_destroy(server.display);
     return 1;
@@ -2097,7 +2160,7 @@ int main(int argc, char** argv) {
   unsetenv("DISPLAY");
 
   if (!wlr_backend_start(server.backend)) {
-    fprintf(stderr, "failed to start wlroots backend\n");
+    compositor_log_stderr(LOG_ERR, "failed to start wlroots backend\n");
     cleanup_server_listeners(&server);
     wl_display_destroy(server.display);
     return 1;

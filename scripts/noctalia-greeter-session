@@ -6,9 +6,9 @@ GREETER_BIN="${NOCTALIA_GREETER_BIN:-${_session_dir}/noctalia-greeter}"
 COMPOSITOR_BIN="${NOCTALIA_GREETER_COMPOSITOR_BIN:-${_session_dir}/noctalia-greeter-compositor}"
 
 # Default: park stdout/stderr so wlroots/libseat do not paint the VT. Greeter
-# logs go to syslog (journald / metalog / syslog-ng via the greetd service).
+# and compositor logs go to syslog (journald / metalog / syslog-ng via greetd).
 # NOCTALIA_GREETER_LOG=stderr|stdout|none|- → console debug (no redirect).
-# NOCTALIA_GREETER_LOG=/path → file (+ syslog from the greeter).
+# NOCTALIA_GREETER_LOG=/path → file (+ syslog from the greeter and compositor).
 _pass_log_env=0
 case "${NOCTALIA_GREETER_LOG:-}" in
 "" )
