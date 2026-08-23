@@ -12,9 +12,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <syslog.h>
 #include <sys/timerfd.h>
 #include <sys/wait.h>
+#include <syslog.h>
 #include <time.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
@@ -1727,9 +1727,8 @@ static void add_keyboard(struct greeter_server* server, struct wlr_input_device*
   xkb_keymap_unref(keymap);
   xkb_context_unref(context);
 
-  // Enable Num Lock by default so numeric keypads work on the greeter.
-  // Can be disabled via greeter.toml: [keyboard] numlock = false
-  if (server->keyboard_numlock >= 0) {
+  // Enable Num Lock only when explicitly requested in greeter.toml.
+  if (server->keyboard_numlock > 0) {
     xkb_mod_index_t num_mod = xkb_keymap_mod_get_index(keyboard->wlr_keyboard->keymap, XKB_MOD_NAME_NUM);
     if (num_mod != XKB_MOD_INVALID) {
       xkb_mod_mask_t locked = keyboard->wlr_keyboard->modifiers.locked | ((xkb_mod_mask_t)1 << num_mod);
