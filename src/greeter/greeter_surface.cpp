@@ -6,8 +6,8 @@
 #include "core/log.h"
 #include "core/resource_paths.h"
 #include "greeter/appearance_config.h"
-#include "greeter/greeter_config_store.h"
 #include "greeter/appearance_sync.h"
+#include "greeter/greeter_config_store.h"
 #include "greeter/greeter_preferences.h"
 #include "greeter/greeter_sessions.h"
 #include "greeter/greeter_window.h"
@@ -1169,9 +1169,7 @@ void GreeterSurface::layoutScene(std::uint32_t width, std::uint32_t height) {
         }
     );
     m_configErrorHeading->setPosition(bannerX + padding, bannerY + padding);
-    m_configErrorLabel->setPosition(
-        bannerX + padding, bannerY + padding + m_configErrorHeading->height() + gap
-    );
+    m_configErrorLabel->setPosition(bannerX + padding, bannerY + padding + m_configErrorHeading->height() + gap);
   }
 
   syncHeaderUserAvatar(*renderer, headerGlyphSize, panelX, panelWidth, headerY);

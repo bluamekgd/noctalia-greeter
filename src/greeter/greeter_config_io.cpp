@@ -20,9 +20,8 @@ namespace {
 
   void recordParseError(const std::filesystem::path& path, const toml::parse_error& error) {
     const auto source = error.source();
-    const auto existing = std::ranges::find_if(g_diagnostics, [&path](const auto& diagnostic) {
-      return diagnostic.path == path;
-    });
+    const auto existing =
+        std::ranges::find_if(g_diagnostics, [&path](const auto& diagnostic) { return diagnostic.path == path; });
     if (existing != g_diagnostics.end()) {
       return;
     }
