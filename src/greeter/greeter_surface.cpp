@@ -1234,6 +1234,9 @@ void GreeterSurface::layoutScene(std::uint32_t width, std::uint32_t height) {
 
   const bool showPasswordStep = m_passwordVisible;
   const bool showBackButton = showPasswordStep && showsUserDropdown();
+  const float buttonRadius = Style::scaledRadiusMd();
+  m_loginButton->setRadius(buttonRadius);
+  m_backButton->setRadius(buttonRadius);
   m_passwordField->setVisible(showPasswordStep);
   m_loginButton->setVisible(showPasswordStep);
   m_backButton->setVisible(showBackButton);
@@ -2429,7 +2432,7 @@ void GreeterSurface::layoutPowerButtons(float ox, float oy, float sw, float sh) 
       return;
     }
     btn->setVisible(true);
-    btn->setRadius(size * 0.5f);
+    btn->setRadius(Style::scaledRadius(Style::controlHeightBase * 0.5f));
     btn->setSize(size, size);
     btn->setPosition(x, bottom);
     btn->layout(*renderer);
