@@ -1,3 +1,6 @@
+_NOTE: This fork is just a lazy mod that removes little annoyances i had :)_
+===
+
 Noctalia Greeter
 ===
 
