@@ -30,7 +30,7 @@ jobs:
 
       - name: Rebase onto upstream
         run: |
-          git rebase upstream/master
+          git rebase upstream/main
 
       - name: Push
         run: |
