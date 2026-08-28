@@ -549,11 +549,6 @@ void GreeterSurface::initialize(RenderContext* context) {
   m_shutdownButton->setTooltip("Shut down");
   m_rebootButton = makePowerButton("reload", ColorRole::Secondary, ColorRole::OnSecondary, []() { power::reboot(); });
   m_rebootButton->setTooltip("Restart");
-  if (m_canRebootToFirmware) {
-    m_firmwareButton =
-        makePowerButton("cpu", ColorRole::Secondary, ColorRole::OnSecondary, []() { power::rebootToFirmwareSetup(); });
-    m_firmwareButton->setTooltip("Restart to UEFI firmware setup");
-  }
 
   const auto applySyncedPowerButton = [](Button* button, std::string_view action, std::string_view fallbackTooltip) {
     if (button == nullptr) {
