@@ -32,6 +32,9 @@ namespace greeter {
     PasswordMaskStyle passwordMaskStyle = PasswordMaskStyle::Default;
     bool allowEmptyPassword = false;
     bool hideLogo = false;
+    // UI element positioning: "hidden", "bottom-left", "bottom-right", "top-left", "top-right"
+    std::optional<std::string> powerButtonsPosition;
+    std::optional<std::string> schemeSelectorPosition;
   };
 
   [[nodiscard]] std::filesystem::path greeterConfPath();

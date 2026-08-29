@@ -240,6 +240,9 @@ private:
   bool m_wallpaperDirty = false;
   bool m_hasSyncedWallpaper = false;
   bool m_hideLogo = false;
+  // UI element positioning: "hidden", "bottom-left", "bottom-right", "top-left", "top-right"
+  std::string m_powerButtonsPosition;
+  std::string m_schemeSelectorPosition;
   std::chrono::steady_clock::time_point m_lastAnimTick{};
   bool m_animTickInitialized = false;
   bool m_inInputDispatch = false;

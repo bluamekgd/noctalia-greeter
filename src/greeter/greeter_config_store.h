@@ -46,6 +46,9 @@ namespace greeter::config {
     std::optional<std::string> appearanceScheme;
     std::optional<std::string> appearancePasswordStyle;
     std::optional<bool> appearanceHideLogo;
+    // UI element positioning: "hidden", "bottom-left", "bottom-right", "top-left", "top-right"
+    std::optional<std::string> appearancePowerButtonsPosition;
+    std::optional<std::string> appearanceSchemeSelectorPosition;
     // Optional palette/wallpaper/font; wins over Sync sync.toml when complete.
     GreeterTomlAppearance appearance;
 
