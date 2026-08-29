@@ -3380,9 +3380,11 @@ void GreeterSurface::rebuildSchemeMenu() {
   if (!m_schemeMenuOpen || m_schemeNames.empty()) {
     return;
   }
+  // Open upward when selector is at the bottom, downward otherwise
+  const bool upward = m_schemeSelectorPosition == "bottom-left" || m_schemeSelectorPosition == "bottom-right";
   buildMenu(
       m_schemeNames, m_selectedScheme, m_schemeSelectBox,
-      /*upward=*/false,
+      /*upward=*/upward,
       /*rightAlign=*/true, /*zBase=*/60, m_schemeMenuPanel, m_schemeMenuRows, m_schemeMenuLabels, m_schemeMenuAreas,
       [this](std::size_t i) { selectScheme(i); }
   );
