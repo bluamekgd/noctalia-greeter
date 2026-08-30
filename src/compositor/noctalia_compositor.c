@@ -24,6 +24,7 @@
 #include <wlr/backend/session.h>
 #include <wlr/interfaces/wlr_keyboard.h>
 #include <wlr/render/allocator.h>
+#include <wlr/render/pass.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_cursor.h>
@@ -124,6 +125,7 @@ struct greeter_output {
   struct greeter_view* view;
   bool active;
   bool render_initialized;
+  bool cleared_once;
 };
 
 struct greeter_keyboard {
@@ -1029,9 +1031,97 @@ static int handle_idle_timerfd(int fd, uint32_t mask, void* data) {
   return 0;
 }
 
+static bool initialize_output_render(struct greeter_output* output) {
+  if (output->render_initialized) {
+    return true;
+  }
+
+  struct greeter_server* server = output->server;
+  if (!wlr_output_init_render(output->wlr_output, server->allocator, server->renderer)) {
+    wlr_log(WLR_ERROR, "failed to initialize renderer for %s", output->wlr_output->name);
+    return false;
+  }
+  output->render_initialized = true;
+  return true;
+}
+
+static bool render_output_black(struct greeter_output* output, struct wlr_output_state* state) {
+  struct wlr_render_pass* pass = wlr_output_begin_render_pass(output->wlr_output, state, NULL);
+  if (pass == NULL) {
+    wlr_log(WLR_ERROR, "failed to begin black frame for output %s", output->wlr_output->name);
+    return false;
+  }
+
+  wlr_render_pass_add_rect(
+      pass,
+      &(struct wlr_render_rect_options){
+          .box = {.width = state->buffer->width, .height = state->buffer->height},
+          .color = {0.0f, 0.0f, 0.0f, 1.0f},
+          .blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+      }
+  );
+  if (!wlr_render_pass_submit(pass)) {
+    wlr_log(WLR_ERROR, "failed to render black frame for output %s", output->wlr_output->name);
+    return false;
+  }
+  return true;
+}
+
+static bool clear_enabled_output(struct greeter_output* output) {
+  if (!output->wlr_output->enabled) {
+    return true;
+  }
+  if (!initialize_output_render(output)) {
+    return false;
+  }
+
+  struct wlr_output_state state;
+  wlr_output_state_init(&state);
+  const bool rendered = render_output_black(output, &state);
+  const bool committed = rendered && wlr_output_commit_state(output->wlr_output, &state);
+  wlr_output_state_finish(&state);
+  if (!committed) {
+    wlr_log(WLR_ERROR, "failed to clear output %s", output->wlr_output->name);
+    return false;
+  }
+
+  output->cleared_once = true;
+  wlr_log(WLR_INFO, "cleared output %s before disable", output->wlr_output->name);
+  return true;
+}
+
+static bool commit_output_enabled(struct greeter_output* output);
+
+static bool clear_output_before_disable(struct greeter_output* output) {
+  if (output->wlr_output->enabled) {
+    return clear_enabled_output(output);
+  }
+  if (output->cleared_once) {
+    return true;
+  }
+  return commit_output_enabled(output);
+}
+
 static void disable_output(struct greeter_output* output) {
+  // Disabling the CRTC does not overwrite its framebuffer, and some displays
+  // keep showing that last scanout after signal loss. Replace it with black
+  // first, but still attempt the disable if rendering fails.
+  clear_output_before_disable(output);
+
   if (!output->active && !output->wlr_output->enabled) {
     return;
+  }
+
+  if (output->wlr_output->enabled) {
+    struct wlr_output_state state;
+    wlr_output_state_init(&state);
+    wlr_output_state_set_enabled(&state, false);
+    const bool disabled = wlr_output_commit_state(output->wlr_output, &state);
+    wlr_output_state_finish(&state);
+    if (!disabled) {
+      wlr_log(WLR_ERROR, "failed to disable output %s", output->wlr_output->name);
+      return;
+    }
   }
 
   if (output->layout_output != NULL) {
@@ -1042,12 +1132,6 @@ static void disable_output(struct greeter_output* output) {
     wlr_scene_output_destroy(output->scene_output);
     output->scene_output = NULL;
   }
-
-  struct wlr_output_state state;
-  wlr_output_state_init(&state);
-  wlr_output_state_set_enabled(&state, false);
-  wlr_output_commit_state(output->wlr_output, &state);
-  wlr_output_state_finish(&state);
   output->active = false;
   if (output->view != NULL) {
     struct greeter_view* view = output->view;
@@ -1100,12 +1184,8 @@ static struct wlr_output_mode* select_output_mode(struct wlr_output* wlr_output,
 
 static bool commit_output_enabled(struct greeter_output* output) {
   struct greeter_server* server = output->server;
-  if (!output->render_initialized) {
-    if (!wlr_output_init_render(output->wlr_output, server->allocator, server->renderer)) {
-      wlr_log(WLR_ERROR, "failed to initialize renderer for %s", output->wlr_output->name);
-      return false;
-    }
-    output->render_initialized = true;
+  if (!initialize_output_render(output)) {
+    return false;
   }
 
   struct wlr_output_state state;
@@ -1123,13 +1203,16 @@ static bool commit_output_enabled(struct greeter_output* output) {
   const int mode_height = mode != NULL ? mode->height : 0;
   const float scale = output_ui_scale(server, output->wlr_output, mode_width, mode_height);
   wlr_output_state_set_scale(&state, scale);
-  bool ok = wlr_output_commit_state(output->wlr_output, &state);
+  const bool rendered = render_output_black(output, &state);
+  const bool ok = rendered && wlr_output_commit_state(output->wlr_output, &state);
   wlr_output_state_finish(&state);
   if (!ok) {
     wlr_log(WLR_ERROR, "failed to enable output %s", output->wlr_output->name);
     return false;
   }
 
+  output->cleared_once = true;
+  wlr_log(WLR_INFO, "cleared output %s on enable", output->wlr_output->name);
   wlr_log(WLR_INFO, "output %s scale=%.2f transform=%d", output->wlr_output->name, scale, (int)transform);
   return true;
 }
@@ -1308,10 +1391,21 @@ static void choose_outputs(struct greeter_server* server) {
     }
   }
 
+  // Release inherited scanouts first so initially disabled connectors can
+  // borrow any freed CRTCs for their one-time black frame below.
   struct greeter_output* output;
   wl_list_for_each(output, &server->outputs, link) {
     const bool want = use_all || pinned == NULL || output == pinned;
-    if (!want && output->active) {
+    if (!want && output->wlr_output->enabled) {
+      disable_output(output);
+    }
+  }
+
+  wl_list_for_each(output, &server->outputs, link) {
+    const bool want = use_all || pinned == NULL || output == pinned;
+    // Every connector gets an initial black frame. In particular, wlroots can
+    // import an inherited KMS scanout as enabled but inactive in our scene.
+    if (!want) {
       disable_output(output);
     }
   }
