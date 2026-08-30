@@ -90,8 +90,12 @@ private:
   void refreshInputAreaEnabled();
   void ensureLabel();
   void ensureGlyph();
+  void ensureTooltip();
   void applyVariant();
   void applyVisualState();
+  void applyTooltipStyle();
+  void syncTooltipVisibility();
+  void layoutTooltip(Renderer& renderer);
   void resolveVisualStateColors(Color& bg, Color& border, Color& label) const;
   void doLayout(Renderer& renderer) override;
   LayoutSize doMeasure(Renderer& renderer, const LayoutConstraints& constraints) override;
@@ -105,6 +109,8 @@ private:
   Label* m_label = nullptr;
   Flex* m_badge = nullptr;
   Label* m_badgeLabel = nullptr;
+  Flex* m_tooltip = nullptr;
+  Label* m_tooltipLabel = nullptr;
   InputArea* m_inputArea = nullptr;
   std::uint64_t m_animId = 0;
   std::function<void()> m_onClick;

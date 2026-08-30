@@ -185,12 +185,14 @@ Button::Button() {
 
   auto area = std::make_unique<InputArea>();
   area->setOnEnter([this](const InputArea::PointerData& /*data*/) {
+    syncTooltipVisibility();
     applyVisualState();
     if (m_onEnter) {
       m_onEnter();
     }
   });
   area->setOnLeave([this]() {
+    syncTooltipVisibility();
     applyVisualState();
     if (m_onLeave) {
       m_onLeave();
@@ -221,7 +223,10 @@ Button::Button() {
     }
   });
   area->setFocusable(true);
-  area->setOnFocusChange([this](bool /*focused*/) { applyVisualState(); });
+  area->setOnFocusChange([this](bool /*focused*/) {
+    syncTooltipVisibility();
+    applyVisualState();
+  });
   area->setEnabled(false);
   m_inputArea = static_cast<InputArea*>(addChild(std::move(area)));
   m_inputArea->setParticipatesInLayout(false);
@@ -233,6 +238,7 @@ Button::Button() {
   m_paletteConn = paletteChanged().connect([this] {
     // Refresh palette slots; skip if a hover/press animation is running.
     applyVariant();
+    applyTooltipStyle();
   });
 }
 
@@ -320,7 +326,21 @@ void Button::setBadge(std::string_view /*text*/) {}
 
 void Button::setBadgeFontSize(float /*size*/) {}
 
-void Button::setTooltip(std::string_view /*text*/) {}
+void Button::setTooltip(std::string_view text) {
+  if (text.empty()) {
+    if (m_tooltipLabel != nullptr) {
+      m_tooltipLabel->setText("");
+    }
+    syncTooltipVisibility();
+    refreshInputAreaEnabled();
+    return;
+  }
+
+  ensureTooltip();
+  m_tooltipLabel->setText(text);
+  syncTooltipVisibility();
+  refreshInputAreaEnabled();
+}
 
 void Button::ensureBadge() {}
 
@@ -341,6 +361,7 @@ void Button::setEnabled(bool enabled) {
   }
   m_enabled = enabled;
   refreshInputAreaEnabled();
+  syncTooltipVisibility();
   applyVisualState();
 }
 
@@ -396,6 +417,7 @@ void Button::applyVariant() {
 
 void Button::refreshInputAreaEnabled() {
   if (m_inputArea != nullptr) {
+    const bool hasTooltip = m_tooltipLabel != nullptr && !m_tooltipLabel->text().empty();
     m_inputArea->setEnabled(
         m_enabled
         && (static_cast<bool>(m_onClick)
@@ -404,7 +426,8 @@ void Button::refreshInputAreaEnabled() {
             || static_cast<bool>(m_onPress)
             || static_cast<bool>(m_onEnter)
             || static_cast<bool>(m_onLeave)
-            || static_cast<bool>(m_onRightClick))
+            || static_cast<bool>(m_onRightClick)
+            || hasTooltip)
     );
   }
 }
@@ -451,6 +474,152 @@ void Button::ensureGlyph() {
     setGap(Style::spaceXs());
   }
   applyColors(m_targetBg, m_targetBorder, m_targetLabel);
+}
+
+void Button::ensureTooltip() {
+  if (m_tooltip != nullptr) {
+    return;
+  }
+
+  auto tooltip = std::make_unique<Flex>();
+  tooltip->setDirection(FlexDirection::Horizontal);
+  tooltip->setParticipatesInLayout(false);
+  tooltip->setHitTestVisible(false);
+  // Keep geometry pre-laid-out: visibility changes dirty layout, while tooltip
+  // enter/leave must remain a paint-only update so hover is not invalidated.
+  tooltip->setOpacity(0.0f);
+  tooltip->setZIndex(2);
+
+  auto label = std::make_unique<Label>();
+  label->setMaxLines(3);
+  m_tooltipLabel = static_cast<Label*>(tooltip->addChild(std::move(label)));
+
+  m_tooltip = static_cast<Flex*>(addChild(std::move(tooltip)));
+  applyTooltipStyle();
+}
+
+void Button::applyTooltipStyle() {
+  if (m_tooltip == nullptr || m_tooltipLabel == nullptr) {
+    return;
+  }
+  m_tooltip->setFill(colorForRole(ColorRole::Surface));
+  m_tooltip->setBorder(colorForRole(ColorRole::Outline), Style::borderWidth());
+  m_tooltipLabel->setColor(colorForRole(ColorRole::OnSurface));
+}
+
+void Button::syncTooltipVisibility() {
+  if (m_tooltip == nullptr || m_tooltipLabel == nullptr) {
+    return;
+  }
+
+  Node* sceneRoot = this;
+  while (sceneRoot->parent() != nullptr) {
+    sceneRoot = sceneRoot->parent();
+  }
+
+  Button* hoveredOwner = nullptr;
+  Button* focusedOwner = nullptr;
+  const auto findOwner = [&](const auto& visit, Node* node) -> void {
+    if (!node->visible()) {
+      return;
+    }
+    if (auto* button = dynamic_cast<Button*>(node); button != nullptr
+        && button->m_enabled
+        && button->m_inputArea != nullptr
+        && button->m_tooltipLabel != nullptr
+        && !button->m_tooltipLabel->text().empty()) {
+      if (button->m_inputArea->hovered()) {
+        hoveredOwner = button;
+      } else if (button->m_inputArea->focused()) {
+        focusedOwner = button;
+      }
+    }
+    for (const auto& child : node->children()) {
+      visit(visit, child.get());
+    }
+  };
+  findOwner(findOwner, sceneRoot);
+
+  // Pointer intent wins over keyboard focus, and only one tooltip is shown in
+  // a scene at a time so adjacent buttons cannot produce overlapping bubbles.
+  Button* owner = hoveredOwner != nullptr ? hoveredOwner : focusedOwner;
+  const auto applyOwner = [&](const auto& visit, Node* node) -> void {
+    if (auto* button = dynamic_cast<Button*>(node); button != nullptr && button->m_tooltip != nullptr) {
+      button->m_tooltip->setOpacity(button == owner ? 1.0f : 0.0f);
+    }
+    for (const auto& child : node->children()) {
+      visit(visit, child.get());
+    }
+  };
+  applyOwner(applyOwner, sceneRoot);
+}
+
+void Button::layoutTooltip(Renderer& renderer) {
+  if (m_tooltip == nullptr || m_tooltipLabel == nullptr) {
+    return;
+  }
+
+  constexpr float kMaxContentWidthBase = 280.0f;
+  const float gap = Style::spaceSm();
+  const float margin = Style::spaceSm();
+  const float paddingHorizontal = Style::spaceMd();
+
+  Node* sceneRoot = this;
+  while (sceneRoot->parent() != nullptr) {
+    sceneRoot = sceneRoot->parent();
+  }
+
+  float rootLeft = 0.0f;
+  float rootTop = 0.0f;
+  float rootRight = 0.0f;
+  float rootBottom = 0.0f;
+  Node::transformedBounds(sceneRoot, rootLeft, rootTop, rootRight, rootBottom);
+
+  const float rootWidth = std::max(0.0f, rootRight - rootLeft);
+  float maxContentWidth = Style::scaled(kMaxContentWidthBase);
+  if (sceneRoot != this && rootWidth > 0.0f) {
+    maxContentWidth = std::min(maxContentWidth, std::max(1.0f, rootWidth - 2.0f * (margin + paddingHorizontal)));
+  }
+
+  m_tooltip->setPadding(paddingHorizontal, Style::spaceSm());
+  m_tooltip->setRadius(Style::scaledRadiusMd());
+  m_tooltipLabel->setFontSize(Style::fontSizeCaption());
+  m_tooltipLabel->setMaxWidth(maxContentWidth);
+  applyTooltipStyle();
+
+  const LayoutSize tooltipSize = m_tooltip->measure(renderer);
+  const float tooltipWidth = tooltipSize.width;
+  const float tooltipHeight = tooltipSize.height;
+
+  float x = std::round((width() - tooltipWidth) * 0.5f);
+  float y = -gap - tooltipHeight;
+
+  if (sceneRoot != this) {
+    float anchorLeft = 0.0f;
+    float anchorTop = 0.0f;
+    float anchorRight = 0.0f;
+    float anchorBottom = 0.0f;
+    Node::transformedBounds(this, anchorLeft, anchorTop, anchorRight, anchorBottom);
+
+    const float desiredLeft = anchorLeft + x;
+    const float minLeft = rootLeft + margin;
+    const float maxLeft = rootRight - margin - tooltipWidth;
+    if (maxLeft >= minLeft) {
+      x += std::clamp(desiredLeft, minLeft, maxLeft) - desiredLeft;
+    }
+
+    const float spaceAbove = anchorTop - rootTop - margin;
+    const float spaceBelow = rootBottom - margin - anchorBottom;
+    const bool fitsAbove = tooltipHeight + gap <= spaceAbove;
+    const bool fitsBelow = tooltipHeight + gap <= spaceBelow;
+    if (!fitsAbove && (fitsBelow || spaceBelow > spaceAbove)) {
+      y = height() + gap;
+    }
+  }
+
+  m_tooltip->setPosition(x, y);
+  m_tooltip->setSize(tooltipWidth, tooltipHeight);
+  m_tooltip->layout(renderer);
 }
 
 void Button::applyColors(const Color& bg, const Color& border, const Color& label) {
@@ -661,6 +830,8 @@ void Button::doLayout(Renderer& renderer) {
     m_inputArea->setPosition(0.0f, 0.0f);
     m_inputArea->setSize(width(), height());
   }
+
+  layoutTooltip(renderer);
 
   // Skip visual refresh while a color animation is running.
   if (m_animId == 0) {
