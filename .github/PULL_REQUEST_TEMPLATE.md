@@ -50,7 +50,7 @@
 - [ ] I ran the relevant build or test commands, or explained why they were not run.
 - [ ] I self-reviewed the changes.
 - [ ] I checked for new warnings or errors.
-- [ ] I will update end-user documentation in [noctalia-docs](https://github.com/noctalia-dev/noctalia-docs) after merge, or this PR does not change user-facing configuration or behavior.
+- [ ] I updated user-facing documentation in [`docs/user/`](docs/user/) when this PR changes user-visible behavior or configuration, or this PR does not require documentation changes.
 - [ ] I used the existing canonical names for config keys, paths, and identifiers.
 
 ## Additional Notes
