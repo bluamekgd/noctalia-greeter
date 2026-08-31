@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 class GreeterSurface;
@@ -16,6 +17,7 @@ class GreeterWindow;
 class RenderContext;
 class WaylandClient;
 struct wl_surface;
+struct wl_output;
 
 class Greeter {
 public:
@@ -37,10 +39,16 @@ private:
   struct View {
     std::unique_ptr<GreeterSurface> surface;
     std::unique_ptr<GreeterWindow> window;
+    wl_output* output = nullptr;
   };
 
   void connectGreetd();
   void onGreetdReadable();
+  void onGreetdTimeout(const GreetdRequestTimeout& timeout);
+  void onGreetdTransportError(const GreetdError& error);
+  void markGreetdUnavailable(std::string_view reason);
+  [[nodiscard]] bool claimAuthSurface(GreeterSurface* surface);
+  void releaseAuthSurface(GreeterSurface* surface);
   void setupInputCallbacks(WaylandClient& client);
   void syncOutputWindows();
   void syncStateFrom(const GreeterSurface* source);
@@ -54,6 +62,7 @@ private:
   std::vector<View> m_views;
   GreetdClient m_greetdClient;
   GreeterSurface* m_activeSurface = nullptr;
+  GreeterSurface* m_authSurface = nullptr;
 
   std::string m_defaultUsername;
   bool m_exitRequested = false;
@@ -61,4 +70,5 @@ private:
   bool m_initializing = false;
   bool m_pendingOutputSync = false;
   bool m_syncingOutputWindows = false;
+  bool m_greetdUnavailable = false;
 };

@@ -88,7 +88,9 @@ namespace {
     return key == "layout" || key == "variant" || key == "options" || key == "numlock";
   }
 
-  [[nodiscard]] bool isKnownAuthKey(std::string_view key) { return key == "allow_empty_password"; }
+  [[nodiscard]] bool isKnownAuthKey(std::string_view key) {
+    return key == "allow_empty_password" || key == "request_timeout";
+  }
 
   [[nodiscard]] std::optional<std::string> stringValue(const toml::node& node) {
     if (const auto value = node.value<std::string>()) {
@@ -131,6 +133,15 @@ namespace {
   [[nodiscard]] std::optional<int> idleTimeoutValue(const toml::node& node) {
     if (const auto value = node.value<int64_t>()) {
       if (*value >= 0 && *value <= 86400) {
+        return static_cast<int>(*value);
+      }
+    }
+    return std::nullopt;
+  }
+
+  [[nodiscard]] std::optional<int> authRequestTimeoutValue(const toml::node& node) {
+    if (const auto value = node.value<int64_t>()) {
+      if (*value >= 0 && *value <= 3600) {
         return static_cast<int>(*value);
       }
     }
@@ -338,8 +349,16 @@ namespace {
             warnUnknownSectionKey(path, keyView, entryView);
             continue;
           }
-          if (const auto value = entryNode.value<bool>()) {
-            config.authAllowEmptyPassword = *value;
+          if (entryView == "allow_empty_password") {
+            if (const auto value = entryNode.value<bool>()) {
+              config.authAllowEmptyPassword = *value;
+            } else {
+              kLog.warn("{}: invalid auth.allow_empty_password value", path.string());
+            }
+          } else if (const auto timeout = authRequestTimeoutValue(entryNode)) {
+            config.authRequestTimeoutSec = *timeout;
+          } else {
+            kLog.warn("{}: invalid auth.request_timeout value", path.string());
           }
         }
       }
@@ -565,9 +584,14 @@ namespace {
       root.insert("keyboard", std::move(keyboard));
     }
 
-    if (config.authAllowEmptyPassword.has_value()) {
+    if (config.authAllowEmptyPassword.has_value() || config.authRequestTimeoutSec.has_value()) {
       toml::table auth;
-      auth.insert_or_assign("allow_empty_password", *config.authAllowEmptyPassword);
+      if (config.authAllowEmptyPassword.has_value()) {
+        auth.insert_or_assign("allow_empty_password", *config.authAllowEmptyPassword);
+      }
+      if (config.authRequestTimeoutSec.has_value()) {
+        auth.insert_or_assign("request_timeout", static_cast<int64_t>(*config.authRequestTimeoutSec));
+      }
       root.insert("auth", std::move(auth));
     }
 
@@ -815,7 +839,7 @@ namespace greeter::config {
     out << "# [appearance.wallpapers.<connector>] per-output wallpaper overrides\n";
     out << "# [output] name/layout/scale/scales/width/height/transforms, [idle] timeout, [cursor] theme/size/path\n";
     out << "# [keyboard] layout/variant/options/numlock\n";
-    out << "# [auth] allow_empty_password (bool, default false; enables fingerprint/smartcard PAM auth)\n";
+    out << "# [auth] allow_empty_password (bool), request_timeout (0-3600 seconds; default 60, 0 disables)\n";
     out << '\n';
     out << formatToml(table);
 

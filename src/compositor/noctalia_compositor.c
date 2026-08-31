@@ -1346,7 +1346,6 @@ static bool all_outputs_active(struct greeter_server* server) {
 
 static int launch_timer_fired(void* data) {
   struct greeter_server* server = data;
-  server->launch_timer = NULL;
   try_launch_greeter(server);
   return 0;
 }
@@ -1711,6 +1710,7 @@ static void handle_keyboard_modifiers(struct wl_listener* listener, void* data) 
   if (server->shutting_down || server->seat == NULL) {
     return;
   }
+  wlr_seat_set_keyboard(server->seat, keyboard->wlr_keyboard);
   wlr_seat_keyboard_notify_modifiers(server->seat, &keyboard->wlr_keyboard->modifiers);
 }
 
@@ -1739,6 +1739,7 @@ static void handle_keyboard_key(struct wl_listener* listener, void* data) {
   if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
     note_activity(server);
   }
+  wlr_seat_set_keyboard(server->seat, keyboard->wlr_keyboard);
   wlr_seat_keyboard_notify_key(server->seat, event->time_msec, event->keycode, event->state);
 }
 
@@ -2055,7 +2056,7 @@ static void try_launch_greeter(void* data) {
   warp_cursor_to_initial_position(server);
 
   char** argv = child_argv(server->child_argc, server->child_argv_ptr);
-  bool free_argv = server->child_argc <= 1;
+  bool free_argv = server->child_argc <= 1 || (server->child_argc > 1 && strcmp(server->child_argv_ptr[1], "--") == 0);
   if (argv == NULL || !start_child(server, argv, free_argv)) {
     wlr_log(WLR_ERROR, "failed to start greeter client");
     wl_display_terminate(server->display);
@@ -2130,6 +2131,66 @@ static void cleanup_server_listeners(struct greeter_server* server) {
   }
 }
 
+static void cleanup_server_resources(struct greeter_server* server) {
+  if (server->display == NULL) {
+    return;
+  }
+
+  if (server->sigchld_source != NULL) {
+    wl_event_source_remove(server->sigchld_source);
+    server->sigchld_source = NULL;
+  }
+  if (server->launch_timer != NULL) {
+    wl_event_source_remove(server->launch_timer);
+    server->launch_timer = NULL;
+  }
+  if (server->idle_timerfd_source != NULL) {
+    wl_event_source_remove(server->idle_timerfd_source);
+    server->idle_timerfd_source = NULL;
+  }
+  if (server->idle_timerfd >= 0) {
+    close(server->idle_timerfd);
+    server->idle_timerfd = -1;
+  }
+
+  cleanup_server_listeners(server);
+  if (server->display != NULL) {
+    wl_display_destroy_clients(server->display);
+  }
+  if (server->scene != NULL) {
+    wlr_scene_node_destroy(&server->scene->tree.node);
+    server->scene = NULL;
+  }
+  if (server->cursor_mgr != NULL) {
+    wlr_xcursor_manager_destroy(server->cursor_mgr);
+    server->cursor_mgr = NULL;
+  }
+  if (server->cursor != NULL) {
+    wlr_cursor_destroy(server->cursor);
+    server->cursor = NULL;
+  }
+  if (server->output_layout != NULL) {
+    wlr_output_layout_destroy(server->output_layout);
+    server->output_layout = NULL;
+  }
+  if (server->allocator != NULL) {
+    wlr_allocator_destroy(server->allocator);
+    server->allocator = NULL;
+  }
+  if (server->renderer != NULL) {
+    wlr_renderer_destroy(server->renderer);
+    server->renderer = NULL;
+  }
+  if (server->backend != NULL) {
+    wlr_backend_destroy(server->backend);
+    server->backend = NULL;
+  }
+  if (server->display != NULL) {
+    wl_display_destroy(server->display);
+    server->display = NULL;
+  }
+}
+
 int main(int argc, char** argv) {
   compositor_init_logging();
   wlr_log_init(WLR_INFO, compositor_wlr_log);
@@ -2151,19 +2212,19 @@ int main(int argc, char** argv) {
   server.backend = wlr_backend_autocreate(wl_display_get_event_loop(server.display), &server.session);
   if (server.backend == NULL) {
     compositor_log_stderr(LOG_ERR, "failed to create wlroots backend\n");
-    wl_display_destroy(server.display);
+    cleanup_server_resources(&server);
     return 1;
   }
   server.renderer = wlr_renderer_autocreate(server.backend);
   if (server.renderer == NULL || !wlr_renderer_init_wl_display(server.renderer, server.display)) {
     compositor_log_stderr(LOG_ERR, "failed to create wlroots renderer\n");
-    wl_display_destroy(server.display);
+    cleanup_server_resources(&server);
     return 1;
   }
   server.allocator = wlr_allocator_autocreate(server.backend, server.renderer);
   if (server.allocator == NULL) {
     compositor_log_stderr(LOG_ERR, "failed to create wlroots allocator\n");
-    wl_display_destroy(server.display);
+    cleanup_server_resources(&server);
     return 1;
   }
 
@@ -2245,8 +2306,7 @@ int main(int argc, char** argv) {
   const char* socket = wl_display_add_socket_auto(server.display);
   if (socket == NULL) {
     compositor_log_stderr(LOG_ERR, "failed to create Wayland socket\n");
-    cleanup_server_listeners(&server);
-    wl_display_destroy(server.display);
+    cleanup_server_resources(&server);
     return 1;
   }
   setenv("WAYLAND_DISPLAY", socket, 1);
@@ -2254,8 +2314,7 @@ int main(int argc, char** argv) {
 
   if (!wlr_backend_start(server.backend)) {
     compositor_log_stderr(LOG_ERR, "failed to start wlroots backend\n");
-    cleanup_server_listeners(&server);
-    wl_display_destroy(server.display);
+    cleanup_server_resources(&server);
     return 1;
   }
 
@@ -2300,17 +2359,6 @@ int main(int argc, char** argv) {
   if (server.child_pid > 0) {
     kill(server.child_pid, SIGTERM);
   }
-  if (server.sigchld_source != NULL) {
-    wl_event_source_remove(server.sigchld_source);
-  }
-  if (server.idle_timerfd_source != NULL) {
-    wl_event_source_remove(server.idle_timerfd_source);
-  }
-  if (server.idle_timerfd >= 0) {
-    close(server.idle_timerfd);
-  }
-  cleanup_server_listeners(&server);
-  wl_display_destroy_clients(server.display);
-  wl_display_destroy(server.display);
+  cleanup_server_resources(&server);
   return 0;
 }

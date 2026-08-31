@@ -735,7 +735,7 @@ void Button::applyVisualState() {
             lerpColor(m_fromLabel, m_targetLabel, t)
         );
       },
-      [this]() { m_animId = 0; }
+      [this]() { m_animId = 0; }, this
   );
   markPaintDirty();
 }

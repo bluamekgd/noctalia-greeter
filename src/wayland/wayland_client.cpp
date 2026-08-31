@@ -23,6 +23,22 @@
 namespace {
   constexpr Logger kLog("wayland");
 
+  void releaseOutput(wl_output* output) {
+    if (wl_output_get_version(output) >= WL_OUTPUT_RELEASE_SINCE_VERSION) {
+      wl_output_release(output);
+    } else {
+      wl_output_destroy(output);
+    }
+  }
+
+  void releaseSeat(wl_seat* seat) {
+    if (wl_seat_get_version(seat) >= WL_SEAT_RELEASE_SINCE_VERSION) {
+      wl_seat_release(seat);
+    } else {
+      wl_seat_destroy(seat);
+    }
+  }
+
   void xdgWmBasePing(void* /*data*/, xdg_wm_base* wmBase, std::uint32_t serial) { xdg_wm_base_pong(wmBase, serial); }
 
   const xdg_wm_base_listener kXdgWmBaseListener = {
@@ -256,12 +272,27 @@ bool WaylandClient::connect() {
 void WaylandClient::disconnect() {
   m_seatHandler.cleanup();
 
+  for (WaylandOutputInfo& output : m_outputs) {
+    if (output.output != nullptr) {
+      releaseOutput(output.output);
+    }
+  }
+  m_outputs.clear();
+
+  if (m_fractionalScaleManager != nullptr) {
+    wp_fractional_scale_manager_v1_destroy(m_fractionalScaleManager);
+    m_fractionalScaleManager = nullptr;
+  }
+  if (m_viewporter != nullptr) {
+    wp_viewporter_destroy(m_viewporter);
+    m_viewporter = nullptr;
+  }
   if (m_xdgWmBase != nullptr) {
     xdg_wm_base_destroy(m_xdgWmBase);
     m_xdgWmBase = nullptr;
   }
   if (m_seat != nullptr) {
-    wl_seat_destroy(m_seat);
+    releaseSeat(m_seat);
     m_seat = nullptr;
   }
   if (m_compositor != nullptr) {
@@ -787,7 +818,24 @@ void WaylandClient::handleGlobal(
   static_cast<WaylandClient*>(data)->bindGlobal(registry, name, interface, version);
 }
 
-void WaylandClient::handleGlobalRemove(void* /*data*/, wl_registry* /*registry*/, std::uint32_t /*name*/) {}
+void WaylandClient::handleGlobalRemove(void* data, wl_registry* /*registry*/, const std::uint32_t name) {
+  auto* client = static_cast<WaylandClient*>(data);
+  const auto output = std::find_if(client->m_outputs.begin(), client->m_outputs.end(), [name](const auto& candidate) {
+    return candidate.registryName == name;
+  });
+  if (output == client->m_outputs.end()) {
+    return;
+  }
+
+  wl_output* removed = output->output;
+  const std::string removedName = output->name;
+  client->m_outputs.erase(output);
+  if (removed != nullptr) {
+    releaseOutput(removed);
+  }
+  kLog.info("output '{}' removed", removedName.empty() ? "?" : removedName.c_str());
+  client->notifyOutputsChanged();
+}
 
 void WaylandClient::bindGlobal(
     wl_registry* registry, std::uint32_t name, const char* interface, std::uint32_t version

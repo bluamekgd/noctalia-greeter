@@ -48,12 +48,21 @@ public:
   void setUsername(const std::string& username);
   void setOnExitRequested(std::function<void()> callback);
   void setOnStateChanged(std::function<void(GreeterSurface*)> callback);
+  void setOnAuthBeginRequested(std::function<bool(GreeterSurface*)> callback);
+  void setOnAuthEnded(std::function<void(GreeterSurface*)> callback);
+  void setOnGreetdTransportError(std::function<void(const GreetdError&)> callback);
   void setKeyboardOwner(bool owner) noexcept;
 
   void mirrorStateFrom(const GreeterSurface& other);
 
   // Drive the greetd auth conversation forward when its socket is readable.
   void onGreetdReadable();
+  // Fail closed without sending another request when the shared greetd backend
+  // can no longer make progress.
+  void setGreetdUnavailable(std::string_view reason);
+  // Prevent this surface from starting a second conversation on the shared
+  // greetd connection while another output owns authentication.
+  void setSharedAuthBlocked(bool blocked);
   // True while this surface is mid-conversation with greetd.
   [[nodiscard]] bool authInProgress() const noexcept { return m_authenticating; }
 
@@ -89,7 +98,8 @@ private:
   void syncAuthInteractivity();
   void beginSessionStart();
   void onAuthError(const GreetdError& error);
-  void resetAuthSession();
+  void reportGreetdTransportError(const GreetdError& error);
+  [[nodiscard]] bool resetAuthSession();
   void clearPasswordInput();
   void updateStatus(const std::string& text, bool isError);
   void toggleUserMenu();
@@ -153,8 +163,10 @@ private:
   void syncWallpaperTexture();
   void syncHeaderUserAvatar(class Renderer& renderer, float size, float panelX, float panelWidth, float headerY);
 
-  Node m_root;
+  // Nodes unregister animations while being destroyed, so the manager must
+  // outlive the entire scene tree (members are destroyed in reverse order).
   AnimationManager m_animations;
+  Node m_root;
   GreeterWindow* m_window = nullptr;
   RenderContext* m_renderContext = nullptr;
   GreetdClient* m_greetdClient = nullptr;
@@ -223,12 +235,17 @@ private:
   std::string m_status;
   bool m_statusIsError = false;
   bool m_authenticating = false;
+  bool m_greetdUnavailable = false;
+  bool m_sharedAuthBlocked = false;
   bool m_authSessionStarted = false;
   bool m_secretPromptWaiting = false; // greetd wants secret input from the user
   bool m_hasPendingResponse = false;  // user-supplied input armed for next prompt
   std::string m_pendingResponse;
   std::deque<AuthRequest> m_pendingReplies;
   std::function<void()> m_onExitRequested;
+  std::function<bool(GreeterSurface*)> m_onAuthBeginRequested;
+  std::function<void(GreeterSurface*)> m_onAuthEnded;
+  std::function<void(const GreetdError&)> m_onGreetdTransportError;
   TextureHandle m_brandLogoTexture{};
   TextureHandle m_headerAvatarTexture{};
   TextureHandle m_wallpaperTexture{};

@@ -13,7 +13,9 @@
 #include "wayland/wayland_client.h"
 #include "wayland/wayland_seat.h"
 
+#include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <poll.h>
@@ -69,6 +71,8 @@ bool Greeter::initialize(WaylandClient& client) {
   greeter::config::clearConfigDiagnostics();
 
   const greeter::GreeterPreferences prefs = greeter::loadGreeterPreferences();
+
+  m_greetdClient.setRequestTimeout(std::chrono::seconds(prefs.authRequestTimeoutSec));
 
   Input::setPasswordMaskStyle(
       prefs.passwordMaskStyle == greeter::PasswordMaskStyle::RandomIcons ? Input::PasswordMaskStyle::RandomIcons
@@ -156,7 +160,8 @@ int Greeter::run(WaylandClient& client, const std::atomic<bool>& shutdownRequest
     }
 
     const int repeatMs = client.repeatPollTimeoutMs();
-    const int timeoutMs = repeatMs >= 0 ? repeatMs : -1;
+    const int requestMs = m_greetdClient.requestPollTimeoutMs();
+    const int timeoutMs = repeatMs < 0 ? requestMs : requestMs < 0 ? repeatMs : std::min(repeatMs, requestMs);
 
     while (wl_display_prepare_read(display) != 0) {
       if (wl_display_dispatch_pending(display) < 0) {
@@ -213,6 +218,12 @@ int Greeter::run(WaylandClient& client, const std::atomic<bool>& shutdownRequest
       wl_display_cancel_read(display);
     }
 
+    // A readable reply at the deadline wins because it was drained above and
+    // disarmed the watchdog before this check.
+    if (const auto timeout = m_greetdClient.timedOutRequest()) {
+      onGreetdTimeout(*timeout);
+    }
+
     if (wl_display_dispatch_pending(display) < 0) {
       logWaylandDispatchError(display, "dispatch_pending");
       return 1;
@@ -223,29 +234,73 @@ int Greeter::run(WaylandClient& client, const std::atomic<bool>& shutdownRequest
 }
 
 void Greeter::syncOutputWindows() {
-  if (m_client == nullptr || m_syncingOutputWindows) {
+  if (m_client == nullptr) {
+    return;
+  }
+  if (m_syncingOutputWindows) {
+    m_pendingOutputSync = true;
     return;
   }
   m_syncingOutputWindows = true;
+  m_pendingOutputSync = false;
 
-  const auto targets = m_client->greeterTargetOutputs();
+  struct TargetOutput {
+    wl_output* output = nullptr;
+    std::string name;
+  };
+  std::vector<TargetOutput> targets;
+  for (const WaylandOutputInfo* output : m_client->greeterTargetOutputs()) {
+    if (output != nullptr) {
+      targets.push_back(TargetOutput{.output = output->output, .name = output->name});
+    }
+  }
   kLog.info("syncOutputWindows: {} target output(s), {} view(s)", targets.size(), m_views.size());
 
-  while (m_views.size() > targets.size()) {
-    if (m_activeSurface == m_views.back().surface.get()) {
-      m_activeSurface = m_views.empty() ? nullptr : m_views.front().surface.get();
+  const auto isTargetOutput = [&targets](const wl_output* output) {
+    return std::ranges::any_of(targets, [output](const TargetOutput& target) { return target.output == output; });
+  };
+
+  // Toplevels are assigned to a specific compositor output when they are
+  // created. Remove the exact views whose output disappeared; moving a view to
+  // another vector slot does not migrate that compositor-side assignment.
+  for (auto it = m_views.begin(); it != m_views.end();) {
+    if (isTargetOutput(it->output)) {
+      ++it;
+      continue;
     }
-    m_views.pop_back();
+    if (m_authSurface == it->surface.get()) {
+      markGreetdUnavailable("Login interrupted after the display configuration changed. Restart greetd.");
+    }
+    if (m_activeSurface == it->surface.get()) {
+      m_activeSurface = nullptr;
+    }
+    it = m_views.erase(it);
   }
 
-  const std::size_t viewsBefore = m_views.size();
-  while (m_views.size() < targets.size()) {
+  bool createdView = false;
+  for (std::size_t index = 0; index < targets.size(); ++index) {
+    const auto existing = std::find_if(
+        m_views.begin() + static_cast<std::ptrdiff_t>(index), m_views.end(),
+        [target = targets[index].output](const View& view) { return view.output == target; }
+    );
+    if (existing != m_views.end()) {
+      std::iter_swap(m_views.begin() + static_cast<std::ptrdiff_t>(index), existing);
+      continue;
+    }
+
     View view;
     view.surface = std::make_unique<GreeterSurface>();
     view.surface->setGreetdClient(&m_greetdClient);
     view.surface->setOnExitRequested([this]() { m_exitRequested = true; });
     view.surface->setOnStateChanged([this](GreeterSurface* source) { syncStateFrom(source); });
+    view.surface->setOnAuthBeginRequested([this](GreeterSurface* source) { return claimAuthSurface(source); });
+    view.surface->setOnAuthEnded([this](GreeterSurface* source) { releaseAuthSurface(source); });
+    view.surface->setOnGreetdTransportError([this](const GreetdError& error) { onGreetdTransportError(error); });
     view.surface->initialize(m_renderContext.get());
+    view.surface->setSharedAuthBlocked(m_authSurface != nullptr);
+    if (m_greetdUnavailable) {
+      view.surface->setGreetdUnavailable("Login service is unavailable. Restart greetd.");
+    }
 
     view.window = std::make_unique<GreeterWindow>(*m_client, m_glSharedContext, *m_renderContext, *view.surface);
     view.surface->setWindow(view.window.get());
@@ -256,19 +311,20 @@ void Greeter::syncOutputWindows() {
       return;
     }
 
-    const std::size_t index = m_views.size();
-    view.window->bindOutput(targets[index]->output);
-    view.surface->setBoundOutputName(targets[index]->name);
-    kLog.info("greeter view for output '{}'", targets[index]->name.empty() ? "?" : targets[index]->name.c_str());
+    view.window->bindOutput(targets[index].output);
+    view.surface->setBoundOutputName(targets[index].name);
+    view.output = targets[index].output;
+    kLog.info("greeter view for output '{}'", targets[index].name.empty() ? "?" : targets[index].name.c_str());
 
     if (!m_views.empty()) {
       view.surface->mirrorStateFrom(*m_views.front().surface);
     }
 
-    m_views.push_back(std::move(view));
+    m_views.insert(m_views.begin() + static_cast<std::ptrdiff_t>(index), std::move(view));
+    createdView = true;
   }
 
-  if (m_views.size() > viewsBefore) {
+  if (createdView) {
     if (m_client->flush() < 0) {
       kLog.error("Wayland flush failed while creating greeter windows");
       m_syncingOutputWindows = false;
@@ -279,11 +335,16 @@ void Greeter::syncOutputWindows() {
       m_syncingOutputWindows = false;
       return;
     }
+    if (m_pendingOutputSync) {
+      m_syncingOutputWindows = false;
+      syncOutputWindows();
+      return;
+    }
   }
 
   for (std::size_t i = 0; i < targets.size(); ++i) {
-    m_views[i].window->bindOutput(targets[i]->output);
-    m_views[i].surface->setBoundOutputName(targets[i]->name);
+    m_views[i].window->bindOutput(targets[i].output);
+    m_views[i].surface->setBoundOutputName(targets[i].name);
     m_views[i].window->matchOutputLogicalSize();
     if (m_sceneReady) {
       m_views[i].window->setSceneReady(true);
@@ -301,6 +362,9 @@ void Greeter::syncOutputWindows() {
   setActiveSurface(keyboardSurface);
 
   m_syncingOutputWindows = false;
+  if (m_pendingOutputSync) {
+    syncOutputWindows();
+  }
 }
 
 void Greeter::setActiveSurface(GreeterSurface* surface) {
@@ -348,19 +412,65 @@ void Greeter::connectGreetd() {
 
   if (!m_greetdClient.connect(path)) {
     kLog.error("failed to connect to greetd at {}", path);
+    m_greetdUnavailable = true;
+  }
+}
+
+void Greeter::onGreetdTimeout(const GreetdRequestTimeout& timeout) {
+  kLog.error(
+      "greetd request '{}' timed out after {} ms", greetdRequestTypeName(timeout.request), timeout.elapsed.count()
+  );
+
+  // The greetd auth worker may have died while its parent is still holding the
+  // session lock. Do not send cancel, reconnect, or exit: none can recover that
+  // daemon state, and exiting would leave the VT without a greeter.
+  markGreetdUnavailable("Login service stopped responding. Restart greetd.");
+}
+
+void Greeter::onGreetdTransportError(const GreetdError& error) {
+  kLog.error("greetd transport failed: {}", error.description);
+  markGreetdUnavailable("Login service connection failed. Restart greetd.");
+}
+
+void Greeter::markGreetdUnavailable(const std::string_view reason) {
+  m_greetdClient.disconnect();
+  m_greetdUnavailable = true;
+  m_authSurface = nullptr;
+  for (auto& view : m_views) {
+    if (view.surface) {
+      view.surface->setGreetdUnavailable(reason);
+    }
+  }
+}
+
+bool Greeter::claimAuthSurface(GreeterSurface* surface) {
+  if (surface == nullptr || m_greetdUnavailable) {
+    return false;
+  }
+  if (m_authSurface != nullptr && m_authSurface != surface) {
+    return false;
+  }
+  m_authSurface = surface;
+  for (auto& view : m_views) {
+    view.surface->setSharedAuthBlocked(view.surface.get() != surface);
+  }
+  return true;
+}
+
+void Greeter::releaseAuthSurface(GreeterSurface* surface) {
+  if (surface == nullptr || m_authSurface != surface) {
+    return;
+  }
+  m_authSurface = nullptr;
+  for (auto& view : m_views) {
+    view.surface->setSharedAuthBlocked(false);
   }
 }
 
 void Greeter::onGreetdReadable() {
-  // Route replies to the authenticating surface; fall back to the active (or
-  // first) surface to drain stray acks.
-  GreeterSurface* target = nullptr;
-  for (auto& view : m_views) {
-    if (view.surface && view.surface->authInProgress()) {
-      target = view.surface.get();
-      break;
-    }
-  }
+  // The owner persists through cancellation, even after authInProgress() is
+  // cleared, so its final ack is still correlated with the right surface.
+  GreeterSurface* target = m_authSurface;
   if (target == nullptr) {
     target = m_activeSurface;
   }

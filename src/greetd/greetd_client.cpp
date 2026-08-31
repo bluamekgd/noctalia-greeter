@@ -2,9 +2,12 @@
 
 #include "core/log.h"
 
+#include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <fcntl.h>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <poll.h>
 #include <sys/socket.h>
@@ -15,6 +18,7 @@ using json = nlohmann::json;
 
 namespace {
   constexpr Logger kLog("greetd");
+  constexpr auto kWriteTimeout = std::chrono::seconds(1);
 
   std::optional<GreetdError> parseError(const json& data) {
     if (data.value("type", "") != "error") {
@@ -72,6 +76,20 @@ namespace {
   }
 } // namespace
 
+const char* greetdRequestTypeName(const GreetdRequestType type) noexcept {
+  switch (type) {
+  case GreetdRequestType::CreateSession:
+    return "create_session";
+  case GreetdRequestType::PostAuthMessageResponse:
+    return "post_auth_message_response";
+  case GreetdRequestType::StartSession:
+    return "start_session";
+  case GreetdRequestType::CancelSession:
+    return "cancel_session";
+  }
+  return "unknown";
+}
+
 GreetdClient::GreetdClient() = default;
 
 GreetdClient::~GreetdClient() { disconnect(); }
@@ -113,14 +131,49 @@ void GreetdClient::disconnect() {
     m_socketFd = -1;
   }
   m_readBuffer.clear();
+  completeRequest();
 }
 
 bool GreetdClient::isConnected() const noexcept { return m_socketFd >= 0; }
 
+void GreetdClient::setRequestTimeout(const std::chrono::seconds timeout) noexcept { m_requestTimeout = timeout; }
+
+int GreetdClient::requestPollTimeoutMs() const noexcept {
+  if (!m_pendingRequest.has_value() || m_requestTimeout.count() <= 0) {
+    return -1;
+  }
+  const auto now = Clock::now();
+  if (now >= m_requestDeadline) {
+    return 0;
+  }
+  const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(m_requestDeadline - now).count();
+  return static_cast<int>(std::min<long long>(remaining, std::numeric_limits<int>::max()));
+}
+
+std::optional<GreetdRequestTimeout> GreetdClient::timedOutRequest() const noexcept {
+  if (!m_pendingRequest.has_value() || m_requestTimeout.count() <= 0) {
+    return std::nullopt;
+  }
+  const auto now = Clock::now();
+  if (now < m_requestDeadline) {
+    return std::nullopt;
+  }
+  return GreetdRequestTimeout{
+      .request = *m_pendingRequest,
+      .elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_requestStarted),
+  };
+}
+
 bool GreetdClient::writeAll(const void* data, std::size_t size) {
   const auto* p = static_cast<const char*>(data);
   std::size_t off = 0;
+  const auto deadline = Clock::now() + kWriteTimeout;
+  bool firstAttempt = true;
   while (off < size) {
+    if (!firstAttempt && Clock::now() >= deadline) {
+      return false;
+    }
+    firstAttempt = false;
     const ssize_t n = ::send(m_socketFd, p + off, size - off, MSG_NOSIGNAL);
     if (n > 0) {
       off += static_cast<std::size_t>(n);
@@ -130,27 +183,52 @@ bool GreetdClient::writeAll(const void* data, std::size_t size) {
       continue;
     }
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      // Send buffer full; wait for it to drain (requests are tiny).
+      const auto now = Clock::now();
+      if (now >= deadline) {
+        return false;
+      }
+      const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - now).count();
       pollfd pfd{m_socketFd, POLLOUT, 0};
-      ::poll(&pfd, 1, 1000);
-      continue;
+      const int timeoutMs = static_cast<int>(std::min<long long>(remaining, std::numeric_limits<int>::max()));
+      const int pollResult = ::poll(&pfd, 1, timeoutMs);
+      if (pollResult > 0 && (pfd.revents & POLLOUT) != 0) {
+        continue;
+      }
+      if (pollResult < 0 && errno == EINTR) {
+        continue;
+      }
+      return false;
     }
     return false;
   }
   return true;
 }
 
-bool GreetdClient::sendRequest(const std::string& request) {
+bool GreetdClient::sendRequest(const std::string& request, const GreetdRequestType type) {
   if (m_socketFd < 0) {
     m_lastError = {GreetdErrorType::Error, "not connected to greetd"};
     return false;
   }
+  if (m_pendingRequest.has_value()) {
+    m_lastError = {GreetdErrorType::Error, "another greetd request is already in progress"};
+    return false;
+  }
+
   const std::uint32_t len = static_cast<std::uint32_t>(request.size());
-  if (!writeAll(&len, sizeof(len)) || !writeAll(request.data(), request.size())) {
+  std::string frame(sizeof(len), '\0');
+  std::memcpy(frame.data(), &len, sizeof(len));
+  frame.append(request);
+  if (!writeAll(frame.data(), frame.size())) {
+    // A partial stream frame cannot be recovered. Close it so callers fail
+    // closed instead of issuing another request on a corrupted connection.
+    disconnect();
     m_lastError = {GreetdErrorType::Error, "failed to send request"};
     return false;
   }
   m_lastError.reset();
+  m_pendingRequest = type;
+  m_requestStarted = Clock::now();
+  m_requestDeadline = m_requestStarted + m_requestTimeout;
   return true;
 }
 
@@ -214,20 +292,27 @@ std::optional<GreetdResponse> GreetdClient::readMessage() {
 
   // A complete frame may already be buffered from a previous drain.
   if (auto frame = extractFrame()) {
+    completeRequest();
     return frame;
   }
   drainSocket();
-  if (m_lastError) {
-    return std::nullopt;
+  auto frame = extractFrame();
+  if (frame.has_value()) {
+    completeRequest();
+    // A complete response and EOF can arrive in the same drain. Deliver the
+    // response first; a subsequent read will observe the closed connection.
+    m_lastError.reset();
   }
-  return extractFrame();
+  return frame;
 }
+
+void GreetdClient::completeRequest() noexcept { m_pendingRequest.reset(); }
 
 bool GreetdClient::requestCreateSession(const std::string& username) {
   json req;
   req["type"] = "create_session";
   req["username"] = username;
-  return sendRequest(req.dump());
+  return sendRequest(req.dump(), GreetdRequestType::CreateSession);
 }
 
 bool GreetdClient::requestPostAuthData(const std::string& data) {
@@ -236,7 +321,7 @@ bool GreetdClient::requestPostAuthData(const std::string& data) {
   if (!data.empty()) {
     req["response"] = data;
   }
-  return sendRequest(req.dump());
+  return sendRequest(req.dump(), GreetdRequestType::PostAuthMessageResponse);
 }
 
 bool GreetdClient::requestStartSession(const GreetdSessionCommand& command) {
@@ -260,11 +345,11 @@ bool GreetdClient::requestStartSession(const GreetdSessionCommand& command) {
     req["env"] = envArray;
   }
 
-  return sendRequest(req.dump());
+  return sendRequest(req.dump(), GreetdRequestType::StartSession);
 }
 
 bool GreetdClient::requestCancelSession() {
   json req;
   req["type"] = "cancel_session";
-  return sendRequest(req.dump());
+  return sendRequest(req.dump(), GreetdRequestType::CancelSession);
 }

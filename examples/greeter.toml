@@ -101,3 +101,5 @@ numlock = true
 [auth]
 # Allow empty password submit (fprintd / smartcard PAM). Default false.
 allow_empty_password = false
+# Seconds to wait for each greetd reply (0-3600). 0 disables the watchdog.
+request_timeout = 60

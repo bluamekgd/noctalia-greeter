@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -39,7 +40,7 @@ enum class GreetdErrorType {
 };
 
 struct GreetdError {
-  GreetdErrorType type;
+  GreetdErrorType type = GreetdErrorType::Error;
   std::string description;
 };
 
@@ -56,6 +57,20 @@ struct GreetdResponse {
   GreetdError error;
 };
 
+enum class GreetdRequestType : std::uint8_t {
+  CreateSession,
+  PostAuthMessageResponse,
+  StartSession,
+  CancelSession,
+};
+
+struct GreetdRequestTimeout {
+  GreetdRequestType request = GreetdRequestType::CreateSession;
+  std::chrono::milliseconds elapsed{0};
+};
+
+[[nodiscard]] const char* greetdRequestTypeName(GreetdRequestType type) noexcept;
+
 // Event-driven greetd IPC client: requests are written without blocking, replies
 // are drained by readMessage() when the caller's event loop sees the fd readable.
 class GreetdClient {
@@ -66,6 +81,12 @@ public:
   bool connect(const std::string& socketPath);
   void disconnect();
   [[nodiscard]] bool isConnected() const noexcept;
+
+  // A timeout of zero disables the watchdog. The timeout is applied to each
+  // request independently and is rearmed after every successful write.
+  void setRequestTimeout(std::chrono::seconds timeout) noexcept;
+  [[nodiscard]] int requestPollTimeoutMs() const noexcept;
+  [[nodiscard]] std::optional<GreetdRequestTimeout> timedOutRequest() const noexcept;
 
   // Socket fd for integration into a poll()/epoll loop, or -1 when disconnected.
   [[nodiscard]] int fd() const noexcept { return m_socketFd; }
@@ -84,12 +105,19 @@ public:
   [[nodiscard]] const std::optional<GreetdError>& lastError() const noexcept { return m_lastError; }
 
 private:
-  bool sendRequest(const std::string& request);
+  using Clock = std::chrono::steady_clock;
+
+  bool sendRequest(const std::string& request, GreetdRequestType type);
   bool writeAll(const void* data, std::size_t size);
   void drainSocket();
   std::optional<GreetdResponse> extractFrame();
+  void completeRequest() noexcept;
 
   int m_socketFd = -1;
   std::string m_readBuffer;
   std::optional<GreetdError> m_lastError;
+  std::chrono::seconds m_requestTimeout{60};
+  std::optional<GreetdRequestType> m_pendingRequest;
+  Clock::time_point m_requestStarted{};
+  Clock::time_point m_requestDeadline{};
 };

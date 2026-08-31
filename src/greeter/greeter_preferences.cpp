@@ -450,6 +450,9 @@ namespace greeter {
     if (file.authAllowEmptyPassword.has_value()) {
       prefs.allowEmptyPassword = *file.authAllowEmptyPassword;
     }
+    if (file.authRequestTimeoutSec.has_value()) {
+      prefs.authRequestTimeoutSec = *file.authRequestTimeoutSec;
+    }
     return prefs;
   }
 

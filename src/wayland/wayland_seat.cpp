@@ -60,6 +60,30 @@ namespace {
   constexpr float kAxisValue120PerStep = 120.0f;
   constexpr float kLegacyWheelAxisUnitsPerStep = 10.0f;
 
+  void releasePointer(wl_pointer* pointer) {
+    if (wl_pointer_get_version(pointer) >= WL_POINTER_RELEASE_SINCE_VERSION) {
+      wl_pointer_release(pointer);
+    } else {
+      wl_pointer_destroy(pointer);
+    }
+  }
+
+  void releaseKeyboard(wl_keyboard* keyboard) {
+    if (wl_keyboard_get_version(keyboard) >= WL_KEYBOARD_RELEASE_SINCE_VERSION) {
+      wl_keyboard_release(keyboard);
+    } else {
+      wl_keyboard_destroy(keyboard);
+    }
+  }
+
+  void releaseTouch(wl_touch* touch) {
+    if (wl_touch_get_version(touch) >= WL_TOUCH_RELEASE_SINCE_VERSION) {
+      wl_touch_release(touch);
+    } else {
+      wl_touch_destroy(touch);
+    }
+  }
+
 } // namespace
 
 void WaylandSeat::bind(wl_seat* seat) {
@@ -119,13 +143,13 @@ void WaylandSeat::cleanup() {
     m_cursorShapeDevice = nullptr;
   }
   if (m_pointer != nullptr) {
-    wl_pointer_destroy(m_pointer);
+    releasePointer(m_pointer);
     m_pointer = nullptr;
   }
   m_cursorShapeManager = nullptr;
 
   if (m_touch != nullptr) {
-    wl_touch_destroy(m_touch);
+    releaseTouch(m_touch);
     m_touch = nullptr;
   }
   m_activeTouchId = -1;
@@ -153,7 +177,7 @@ void WaylandSeat::cleanup() {
     m_xkbContext = nullptr;
   }
   if (m_keyboard != nullptr) {
-    wl_keyboard_destroy(m_keyboard);
+    releaseKeyboard(m_keyboard);
     m_keyboard = nullptr;
   }
   m_repeatActive = false;
@@ -172,7 +196,7 @@ void WaylandSeat::handleSeatCapabilities(void* data, wl_seat* seat, std::uint32_
     wl_keyboard_add_listener(self->m_keyboard, &kKeyboardListener, self);
     kLog.info("keyboard: bound");
   } else if (!hasKeyboard && self->m_keyboard != nullptr) {
-    wl_keyboard_destroy(self->m_keyboard);
+    releaseKeyboard(self->m_keyboard);
     self->m_keyboard = nullptr;
     kLog.info("keyboard: released");
   }
@@ -193,7 +217,7 @@ void WaylandSeat::handleSeatCapabilities(void* data, wl_seat* seat, std::uint32_
       wp_cursor_shape_device_v1_destroy(self->m_cursorShapeDevice);
       self->m_cursorShapeDevice = nullptr;
     }
-    wl_pointer_destroy(self->m_pointer);
+    releasePointer(self->m_pointer);
     self->m_pointer = nullptr;
     kLog.info("pointer: released");
   }
@@ -205,7 +229,7 @@ void WaylandSeat::handleSeatCapabilities(void* data, wl_seat* seat, std::uint32_
     wl_touch_add_listener(self->m_touch, &kTouchListener, self);
     kLog.info("touch: bound");
   } else if (!hasTouch && self->m_touch != nullptr) {
-    wl_touch_destroy(self->m_touch);
+    releaseTouch(self->m_touch);
     self->m_touch = nullptr;
     self->m_activeTouchId = -1;
     self->m_touchSurface = nullptr;
